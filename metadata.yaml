@@ -1,7 +1,7 @@
 name: astrbot_plugin_llmpool
 display_name: "LLM 模型池"
 desc: "把LLM们当成人才管理，搞末位淘汰、组间竞争、KPI监控，将低效节点优化掉，帮你的bot降本增效"
-version: "1.0.0"
+version: "1.0.1"
 astrbot_version: ">=4.26.0"
 author: "largefox"
 repo: "https://github.com/largefox/astrbot_plugin_llmpool"
