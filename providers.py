@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
-from astrbot import logger
+from astrbot.api import logger
 from astrbot.core.agent.message import ContentPart, Message
 from astrbot.core.agent.tool import ToolSet
 from astrbot.core.provider.entities import (
