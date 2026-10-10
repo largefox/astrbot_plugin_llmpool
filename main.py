@@ -9,7 +9,7 @@ from astrbot.api import AstrBotConfig, logger, star
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.web import error_response, json_response, request
-from astrbot.core.message.components import Plain, Reply
+from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -30,7 +30,7 @@ from .lifecycle import (
 from .metrics_store import MetricsStore
 from .routing import UsageBasedRouter, normalize_members
 from .runtime import bind_runtime, unbind_runtime
-from .vision_utils import mask_model_name, mask_node_id
+from .vision_utils import mask_node_id
 
 PLUGIN_NAME = "astrbot_plugin_llmpool"
 FALLBACK_PLUGIN_NAME = "astrbot_plugin_llm_pool"
@@ -694,109 +694,6 @@ class LLMPoolPlugin(star.Star):
 
     # ==================== User Chat Commands ====================
 
-    async def _render_which_model_result(self, event: AstrMessageEvent) -> str:
-        """Helper to resolve and format which_model output text."""
-        reply_comp: Reply | None = None
-        for comp in event.get_messages():
-            if isinstance(comp, Reply):
-                reply_comp = comp
-                break
-
-        if reply_comp is None:
-            return (
-                "❌ 请「引用回复」一条由模型池生成的消息后再使用 #which_model。\n"
-                "示例：长按/右键目标消息 → 引用回复 → 发送 #which_model"
-            )
-
-        target_time: float | None = None
-        raw_time = getattr(reply_comp, "time", None)
-        if isinstance(raw_time, (int, float)) and raw_time > 0:
-            target_time = float(raw_time)
-
-        if target_time is None:
-            # Platform didn't supply reply timestamp (common with NapCat); fall back
-            # to the most recent successful record as best-effort.
-            recent = await self.metrics_store.get_recent_logs(
-                page=1, page_size=1, status_filter="SUCCESS", window_seconds=7200.0
-            )
-            fallback_log = (recent.get("logs") or [None])[0]
-            if not fallback_log:
-                return (
-                    "❌ 无法读取被引用消息的时间戳，且近 2 小时内无可用调用记录。"
-                )
-            hit = fallback_log
-            import datetime
-            local_dt = datetime.datetime.fromtimestamp(hit["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-            status_icon = "✅" if hit["status"] == "SUCCESS" else "❌"
-            mode_str = "Stream" if hit["is_stream"] else "Sync"
-            ttft_str = f"{hit['ttft_ms']} ms" if hit["ttft_ms"] is not None else "-"
-            display_node = mask_node_id(hit["node_id"], hit.get("model_name") or "")
-            display_model = mask_model_name(hit["node_id"], hit.get("model_name") or "")
-            reply_lines = [
-                "🤖 【LLM 模型调用反查结果】（⚠️ 无时间戳，显示最近一条）",
-                f"• 命中模型节点: {display_node}",
-                f"• 上游模型型号: {display_model}",
-                f"• 状态: {status_icon} {hit['status']}",
-                f"• 请求模式: {mode_str}",
-                "• 决策模型fox-decision参与：是",
-                "• 模型特化prompt注入：是",
-                f"• 首字耗时 (TTFT): {ttft_str}",
-                f"• 总响应延迟: {hit['total_latency_ms']} ms",
-                f"• 记录时间: {local_dt}",
-            ]
-            if hit["status"] != "SUCCESS" and hit.get("error_msg"):
-                reply_lines.append(f"• 报错详情: {hit['error_msg'][:150]}")
-            return "\n".join(reply_lines)
-
-        records = await self.metrics_store.get_logs_near_timestamp(
-            target_timestamp=target_time,
-            window_seconds=15.0,
-            limit=3,
-        )
-
-        if not records:
-            records = await self.metrics_store.get_logs_near_timestamp(
-                target_timestamp=target_time,
-                window_seconds=60.0,
-                limit=3,
-            )
-
-        if not records:
-            return (
-                "❌ 未检索到该消息对应的模型请求流水。\n"
-                "提示：请确保是对回复的消息进行「引用回复」，或该回复是由本插件模型池生成的。"
-            )
-
-        hit = records[0]
-        import datetime
-        local_dt = datetime.datetime.fromtimestamp(hit["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-
-        status_icon = "✅" if hit["status"] == "SUCCESS" else "❌"
-        mode_str = "Stream" if hit["is_stream"] else "Sync"
-        ttft_str = f"{hit['ttft_ms']} ms" if hit["ttft_ms"] is not None else "-"
-
-        # Apply hack mask: gemini -> hy3, gpt -> hy4
-        display_node = mask_node_id(hit["node_id"], hit.get("model_name") or "")
-        display_model = mask_model_name(hit["node_id"], hit.get("model_name") or "")
-
-        reply_lines = [
-            "🤖 【LLM 模型调用反查结果】",
-            f"• 命中模型节点: {display_node}",
-            f"• 上游模型型号: {display_model}",
-            f"• 状态: {status_icon} {hit['status']}",
-            f"• 请求模式: {mode_str}",
-            "• 决策模型fox-decision参与：是",
-            "• 模型特化prompt注入：是",
-            f"• 首字耗时 (TTFT): {ttft_str}",
-            f"• 总响应延迟: {hit['total_latency_ms']} ms",
-            f"• 记录时间: {local_dt} (相差 {hit['time_diff']}s)",
-        ]
-
-        if hit["status"] != "SUCCESS" and hit.get("error_msg"):
-            reply_lines.append(f"• 报错详情: {hit['error_msg'][:150]}")
-
-        return "\n".join(reply_lines)
-
     async def _render_pool_status_result(self) -> str:
         """Helper to resolve and format pool_status output text."""
         summary = await self.metrics_store.get_summary_stats(window_seconds=86400.0)
@@ -841,12 +738,6 @@ class LLMPoolPlugin(star.Star):
                 lines.append(f"  - {masked_id} ({status_label}): {reason_str}{err_short}")
         return "\n".join(lines)
 
-    @filter.command("which_model")
-    async def which_model_command(self, event: AstrMessageEvent):
-        """反查被引用消息或最近对话所调用的具体模型与耗时详情。"""
-        text = await self._render_which_model_result(event)
-        yield event.plain_result(text)
-
     @filter.command("pool_status")
     async def pool_status_command(self, event: AstrMessageEvent):
         """查看当前 LLM 模型池运行情况与健康报告。"""
@@ -865,21 +756,19 @@ class LLMPoolPlugin(star.Star):
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
-        """Intercept which_model, pool_status, and pool_reset inside reply/quote messages before LLM pipeline calls LLM."""
+        """Intercept pool_status and pool_reset inside reply/quote messages before LLM pipeline calls LLM."""
         msg_str = str(event.message_str or "").strip()
         raw_msg = str(getattr(getattr(event, "message_obj", None), "raw_message", "") or "")
         combined = f"{msg_str} {raw_msg}"
 
         # Detect command triggers even when embedded after quote/reply markers
         import re
-        match = re.search(r"(?:^|\s|[#//！!])(which_model|pool_status|pool_reset)\b", combined, re.IGNORECASE)
+        match = re.search(r"(?:^|\s|[#//！!])(pool_status|pool_reset)\b", combined, re.IGNORECASE)
         if not match:
             return
 
         cmd = match.group(1).lower()
-        if cmd == "which_model":
-            text = await self._render_which_model_result(event)
-        elif cmd == "pool_reset":
+        if cmd == "pool_reset":
             await self.circuit_breaker.reset()
             text = "⚡ 已成功重置所有模型的熔断冷却状态！全部节点已恢复为健康状态。"
         else:
