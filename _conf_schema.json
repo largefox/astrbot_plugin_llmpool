@@ -1,0 +1,299 @@
+{
+  "members": {
+    "description": "模型池成员",
+    "type": "template_list",
+    "default": [],
+    "hint": "添加 AstrBot 中已经配置好的真实 Provider。不要选择“群聊图片转述模型池（路由入口）”本身。",
+    "templates": {
+      "provider": {
+        "name": "模型池成员",
+        "display_item": "provider_id",
+        "hide_hint_in_list": true,
+        "items": {
+          "provider_id": {
+            "description": "Provider",
+            "type": "string",
+            "_special": "select_provider",
+            "default": "",
+            "hint": "选择一个已启用的真实 Provider；模型池入口自身会被自动忽略。"
+          },
+          "group_name": {
+            "description": "模型组 (Group)",
+            "type": "string",
+            "default": "tier1",
+            "hint": "所属模型组。支持配置单个或多个分组（以逗号分隔，例如：tier1, light_llm_pool）。若一个模型需要同时在主模型池和专用节点池使用，在此填入多个组名即可。"
+          },
+          "enabled": {
+            "description": "启用此成员",
+            "type": "bool",
+            "default": true
+          }
+        }
+      }
+    }
+  },
+  "strategy": {
+    "description": "调度策略",
+    "type": "string",
+    "default": "usage-based-routing-v2",
+    "options": [
+      "usage-based-routing-v2",
+      "least_busy",
+      "latency_based",
+      "weighted_random",
+      "round_robin",
+      "ordered_failover"
+    ],
+    "hint": "usage-based-routing-v2=并发负载与权重综合调度；least_busy=纯最闲优先（最低并发）；latency_based=纯延迟优先（最快响应）；weighted_random=按权重随机；round_robin=顺次轮询；ordered_failover=始终优先列表靠前成员。"
+  },
+  "failover": {
+    "description": "失败自动切换",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，当前成员报错或超时会在同一次请求内继续尝试下一成员。"
+  },
+  "max_attempts": {
+    "description": "单次最多尝试成员数",
+    "type": "int",
+    "default": 5,
+    "hint": "单次请求在组内最多尝试的节点数（建议 5 次，防止全量死循环重试）。"
+  },
+  "cooldown_seconds": {
+    "description": "熔断冷却时长（秒）",
+    "type": "int",
+    "default": 1800,
+    "hint": "触发熔断后的封锁时长（默认 1800 秒 / 30分钟）。"
+  },
+  "stream_timeout": {
+    "description": "流式首包等待超时（秒）",
+    "type": "int",
+    "default": 26,
+    "hint": "等待首个 Token 的阶梯基准时间（默认 26 秒），超时立即切换下一节点。"
+  },
+  "chunk_stall_timeout": {
+    "description": "流式断流停滞超时（秒）",
+    "type": "int",
+    "default": 10,
+    "hint": "输出过程中单次 chunk 停滞超过该秒数即判定上游断流，主动截断报错。"
+  },
+  "request_timeout_seconds": {
+    "description": "非流式单节点总超时（秒）",
+    "type": "int",
+    "default": 50,
+    "hint": "每个池成员非流式调用的超时限制（默认 50 秒，容忍长文本生成并防止死节点卡死）。"
+  },
+  "global_timeout_seconds": {
+    "description": "全局耗时预算硬上限（秒）",
+    "type": "float",
+    "default": 120.0,
+    "hint": "整轮调用的全局总耗时硬上限（默认 120 秒）。时间吃紧时自动跳过中间慢组，顺序快连保底组抢答。"
+  },
+  "suppress_error_raise": {
+    "description": "全失败时静默吞并错误（不抛异常红字）",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后当池内所有成员均失败时，静默返回空回复，不向群聊喷出英文报错红字（后台仍保留完整日志）。"
+  },
+  "enable_congestion_promotion": {
+    "description": "启用忙时拥堵自动提权保底组",
+    "type": "bool",
+    "default": false,
+    "hint": "当主模型组大面积熔断或平均延迟严重恶化时，自动将后备保底层顺序向下提权为主力（保留轻量探针探活）。"
+  },
+  "congestion_latency_threshold": {
+    "description": "拥堵判定延迟阈值（秒）",
+    "type": "float",
+    "default": 40.0,
+    "hint": "主模型组可用节点前几名平均耗时超过该秒数即判定进入高峰拥堵（默认 40.0 秒）。"
+  },
+  "enable_hedging": {
+    "description": "启用延迟对冲赛马机制 (Hedging)",
+    "type": "bool",
+    "default": false,
+    "hint": "当主节点响应超过对冲阈值时，自动拉起同组备选节点并发竞速，取最先返回者。"
+  },
+  "hedging_delay_seconds": {
+    "description": "延迟对冲触发阈值（秒）",
+    "type": "float",
+    "default": 24.0,
+    "hint": "主节点请求发出后超过此秒数未返回时触发并发对冲（针对长文本/思考模型生成耗时较长的场景，默认 24.0 秒）。"
+  },
+  "retry_after_seconds": {
+    "description": "重试最小等待间隔 (秒)",
+    "type": "float",
+    "default": 0.0,
+    "hint": "失败后重试下一节点前的最小等待秒数，避免立即重试刚超时的节点。设为 0 表示不等待，立即切换。"
+  },
+  "enable_weighted_failover": {
+    "description": "启用组内加权重试 (Weighted Failover)",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，同组内节点失败时优先按权重在同组内重新选择其他节点重试，而非立即跨组回退。适合同模型多区域/多 Key 部署场景。"
+  },
+  "daily_reset_hour": {
+    "description": "每日配额自动重置整点 (Daily Reset Hour)",
+    "type": "int",
+    "default": 2,
+    "hint": "每天凌晨该整点小时（默认 2 点，避开 0 点高峰期），自动唤醒解冻所有深度休眠的死节点并进行队尾探活。"
+  },
+  "ratelimit_cooldown_seconds": {
+    "description": "429 限流短冷却时长（秒）",
+    "type": "float",
+    "default": 1800.0,
+    "hint": "上游返回 429 限频时的封禁冷却时间（默认 1800 秒）。"
+  },
+  "model_request_interval_seconds": {
+    "description": "同模型防限频最小间隔 (秒)",
+    "type": "float",
+    "default": 3.0,
+    "hint": "短时间内不要频繁请求同一个模型，优先调度同组内其他可用模型，以分散负载并避免触发单模型的 Rate Limit (429) 限频；当组内无其他可用模型时仍正常调用。设为 0 表示不限制。"
+  },
+  "ratelimit_allowed_fails": {
+    "description": "RateLimit (429/欠费) 容忍次数",
+    "type": "int",
+    "default": 0,
+    "hint": "0 表示一旦出现 429 或限流/欠费立即触发短时快速冷却（默认 1800 秒）。"
+  },
+  "timeout_allowed_fails": {
+    "description": "超时 (Timeout) 容忍次数",
+    "type": "int",
+    "default": 2,
+    "hint": "允许的连续超时次数，达到阈值后进入冷却。"
+  },
+  "badrequest_allowed_fails": {
+    "description": "Bad Request (400) 容忍次数",
+    "type": "int",
+    "default": 2,
+    "hint": "400 请求错误容忍次数。"
+  },
+  "aggressive_allowed_fails": {
+    "description": "⚡ 激进节点失败容忍次数",
+    "type": "int",
+    "default": 5,
+    "hint": "开启激进抢跑模式的节点的失败/超时容忍次数（默认 5 次）。在达到该次数前即使发生超时或网络错误也不触发熔断，避免偶发抖动过早熔断激进节点。"
+  },
+  "fallbacks": {
+    "description": "模型组跨组回退链 (Fallbacks)",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "fallback_rule",
+        "source_group": "tier1",
+        "target_group": "tier2"
+      },
+      {
+        "__template_key": "fallback_rule",
+        "source_group": "tier2",
+        "target_group": "tier3"
+      },
+      {
+        "__template_key": "fallback_rule",
+        "source_group": "tier3",
+        "target_group": "tier4"
+      }
+    ],
+    "hint": "配置模型组之间的回退链路。例如：主组（tier1）全部重试失败后，自动降级切换到目标组（tier2）。",
+    "templates": {
+      "fallback_rule": {
+        "name": "回退规则",
+        "display_item": "source_group",
+        "items": {
+          "source_group": {
+            "description": "当前源模型组",
+            "type": "string",
+            "default": "tier1",
+            "hint": "触发失败或超时的源模型组名称。"
+          },
+          "target_group": {
+            "description": "降级目标模型组",
+            "type": "string",
+            "default": "tier2",
+            "hint": "源模型组失败后顺次转接的目标模型组名称。"
+          }
+        }
+      }
+    }
+  },
+  "model_group_alias": {
+    "description": "模型组请求别名映射 (Group Alias)",
+    "type": "template_list",
+    "default": [
+      {
+        "__template_key": "alias_rule",
+        "alias_name": "deepseek-chat",
+        "target_group": "tier1"
+      },
+      {
+        "__template_key": "alias_rule",
+        "alias_name": "fox-heavy-vmodel",
+        "target_group": "tier1"
+      }
+    ],
+    "hint": "当收到特定模型名称请求时，自动映射并转接到对应的模型组。",
+    "templates": {
+      "alias_rule": {
+        "name": "别名规则",
+        "display_item": "alias_name",
+        "items": {
+          "alias_name": {
+            "description": "外部请求模型/别名",
+            "type": "string",
+            "default": "deepseek-chat",
+            "hint": "客户端或请求中填写的别名，例如 deepseek-chat。"
+          },
+          "target_group": {
+            "description": "映射目标模型组",
+            "type": "string",
+            "default": "tier1",
+            "hint": "实际分发的目标模型组名称，例如 tier1。"
+          }
+        }
+      }
+    }
+  },
+  "verbose_logging": {
+    "description": "详细调度日志",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后记录每次选择、尝试序号与成功成员；失败日志始终保留并进行脱敏。"
+  },
+  "dedicated_pools": {
+    "description": "专用节点池列表",
+    "type": "template_list",
+    "default": [],
+    "hint": "可配置多个独立专用节点池，每个池有自己的 Provider ID、分组和隔离设置。调度策略、超时等高级参数请在可视化页面中调整。",
+    "templates": {
+      "pool": {
+        "name": "专用节点池",
+        "display_item": "id",
+        "hide_hint_in_list": true,
+        "items": {
+          "id": {
+            "description": "Provider ID",
+            "type": "string",
+            "default": "light_llm_pool",
+            "hint": "在 AstrBot 中注册的提供商 ID，例如 light_llm_pool。"
+          },
+          "group": {
+            "description": "专用分组名称 (Group)",
+            "type": "string",
+            "default": "light_llm_pool",
+            "hint": "该模型池默认绑定的模型组名称。"
+          },
+          "model_name": {
+            "description": "虚拟模型名称 (Model)",
+            "type": "string",
+            "default": "light-pool-router",
+            "hint": "暴露给 AstrBot 及 API 客户端的虚拟模型名称。"
+          },
+          "strict_group": {
+            "description": "严格组隔离 (不跨组回退)",
+            "type": "bool",
+            "default": true,
+            "hint": "开启后，该模型池仅在专用分组内尝试与重试；当专用分组所有节点均不可用时直接报错，绝不降级回退到其他重型模型组。"
+          }
+        }
+      }
+    }
+  }
+}

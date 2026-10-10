@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Pool 监控与模型配置</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="navbar">
+      <div class="brand">
+        <span class="logo-icon">⚡</span>
+        <div>
+          <h2>LLM 智能模型池</h2>
+          <p class="subtitle">Usage-Based 负载感知、熔断器状态与时段可用性分析</p>
+        </div>
+      </div>
+      <div class="nav-actions">
+        <button id="btn-refresh" class="btn btn-secondary">🔄 刷新数据</button>
+        <button id="btn-reset-all-circuit" class="btn btn-warning">⚡ 重置全部熔断</button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-overview">📊 可用性看板与时延</button>
+      <button class="tab-btn" data-tab="tab-cost">💰 成本与梯队下渗分析</button>
+      <button class="tab-btn" data-tab="tab-nodes">🎛️ 模型池配置管理</button>
+      <button class="tab-btn" data-tab="tab-logs">📜 实时调用流水</button>
+      <button class="tab-btn" data-tab="tab-manage">⚙️ 插件管理</button>
+    </div>
+
+    <!-- Tab 1: Overview & Metrics -->
+    <main id="tab-overview" class="tab-content active">
+      <!-- Active Group & Promotion Status Banner -->
+      <section class="card section-card active-group-card">
+        <div class="active-group-header-row">
+          <div class="active-group-left">
+            <div class="active-group-title-row">
+              <span class="active-group-icon">🚀</span>
+              <span class="active-group-label">当前活跃模型组：</span>
+              <span class="active-group-name" id="current-active-group-name">-</span>
+              <span class="badge" id="badge-promotion-status">加载中...</span>
+            </div>
+            <div class="active-group-meta">
+              <span id="active-group-default-text">默认主组: -</span>
+              <span class="meta-sep">|</span>
+              <span id="active-group-chain-text">当前降级链路: -</span>
+            </div>
+          </div>
+          <div class="active-group-controls">
+            <div class="select-group-wrap">
+              <select id="select-active-group" class="form-control form-control-sm">
+                <option value="">自动调度 (跟随策略/提权)</option>
+              </select>
+            </div>
+            <button id="btn-set-active-group" class="btn btn-primary btn-sm">📌 切换组</button>
+            <button id="btn-reset-active-group" class="btn btn-secondary btn-sm" title="清除手动指定，恢复自动拥堵提权">🔄 重置为自动</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- KPI Cards -->
+      <section class="kpi-grid">
+        <div class="card kpi-card">
+          <div class="kpi-title">24小时请求总量</div>
+          <div class="kpi-value" id="kpi-total">0</div>
+          <div class="kpi-sub" id="kpi-success-sub">成功: 0 | 失败: 0</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-title">综合服务可用率</div>
+          <div class="kpi-value text-success" id="kpi-avail">100%</div>
+          <div class="kpi-sub">基于近 24 小时调用</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-title">平均响应总耗时</div>
+          <div class="kpi-value text-primary" id="kpi-latency">0 ms</div>
+          <div class="kpi-sub">非流式与流式平均</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-title">流式首 Token (TTFT)</div>
+          <div class="kpi-value text-accent" id="kpi-ttft">0 ms</div>
+          <div class="kpi-sub">首包超时阈值: 30s</div>
+        </div>
+      </section>
+
+      <!-- 24-Hour Availability Profile -->
+      <section class="card section-card">
+        <div class="section-header">
+          <h3>🕒 24 小时各时段可用性与时延画像 (00:00 - 23:00)</h3>
+          <span class="badge badge-info">过去 7 天加权统计</span>
+        </div>
+        <div class="hourly-chart-container" id="hourly-bars">
+          <!-- 24 Bars dynamically rendered -->
+        </div>
+      </section>
+
+      <!-- Realtime Node Status Matrix -->
+      <section class="card section-card">
+        <div class="section-header">
+          <h3>🛡️ 节点健康度与熔断状态</h3>
+        </div>
+        <div class="node-group-filter-bar" id="node-group-filter-bar" style="display:none;">
+          <span class="node-group-filter-label">筛选模型组：</span>
+          <div class="node-group-chips" id="node-group-filter-chips"></div>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-node-group-filter" style="display:none;">清空筛选</button>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>节点 / Provider ID</th>
+                <th>模型组</th>
+                <th>熔断状态</th>
+                <th>冷却倒计时</th>
+                <th>活跃并发</th>
+                <th>24h 请求数</th>
+                <th>24h 可用率</th>
+                <th>平均总耗时</th>
+                <th>首字耗时(TTFT)</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="nodes-status-tbody">
+              <tr><td colspan="10" class="text-center">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Multi-Key Fleet Health Card -->
+      <section class="card section-card">
+        <div class="section-header">
+          <h3>🔑 API Key 舰队健康与配额池状态 (Key Fleet Health)</h3>
+          <span class="badge badge-success" id="keyfleet-health-badge">健康度 100%</span>
+        </div>
+        <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 1rem;">
+          <div class="card kpi-card" style="padding:1rem;">
+            <div class="kpi-title">配置总 Key 数</div>
+            <div class="kpi-value text-primary" id="keyfleet-total">0</div>
+          </div>
+          <div class="card kpi-card" style="padding:1rem;">
+            <div class="kpi-title">健康活跃 Key</div>
+            <div class="kpi-value text-success" id="keyfleet-healthy">0</div>
+          </div>
+          <div class="card kpi-card" style="padding:1rem;">
+            <div class="kpi-title">临时隔离 Key (401/封禁)</div>
+            <div class="kpi-value text-danger" id="keyfleet-quarantined">0</div>
+          </div>
+        </div>
+        <div class="keyfleet-nodes-grid" id="keyfleet-nodes-container">
+          <!-- Per-node key items -->
+        </div>
+      </section>
+
+      <!-- 7x24 Weekly Traffic & Congestion Heatmap -->
+      <section class="card section-card">
+        <div class="section-header">
+          <h3>📅 7×24 小时全周请求密度与拥堵热力图 (Weekly Traffic Heatmap)</h3>
+          <span class="badge badge-info" id="heatmap-peak-badge">高峰期计算中...</span>
+        </div>
+        <div class="heatmap-container" id="weekly-heatmap-container">
+          <!-- 7 rows x 24 cols dynamically rendered -->
+        </div>
+        <div class="heatmap-legend">
+          <span style="font-size:0.75rem;color:var(--text-muted);">空闲</span>
+          <div class="heatmap-scale">
+            <span class="hm-cell hm-l0"></span>
+            <span class="hm-cell hm-l1"></span>
+            <span class="hm-cell hm-l2"></span>
+            <span class="hm-cell hm-l3"></span>
+            <span class="hm-cell hm-l4"></span>
+          </div>
+          <span style="font-size:0.75rem;color:var(--text-muted);">繁忙高峰</span>
+        </div>
+      </section>
+    </main>
+
+    <!-- Tab Cost: Depth Cost & Tier Spillover Analysis -->
+    <main id="tab-cost" class="tab-content">
+      <!-- Time Range Selector -->
+      <div class="cost-range-bar">
+        <span class="cost-range-label">📅 分析时段：</span>
+        <button class="btn btn-sm cost-range-btn active" data-range="today">今日</button>
+        <button class="btn btn-sm cost-range-btn" data-range="yesterday">昨日</button>
+        <button class="btn btn-sm cost-range-btn" data-range="24h">近 24 小时</button>
+        <button class="btn btn-sm cost-range-btn" data-range="week">本周</button>
+      </div>
+
+      <!-- Cost KPIs -->
+      <section class="kpi-grid">
+        <div class="card kpi-card">
+          <div class="kpi-title" id="cost-kpi-free-title">今日主力承接率</div>
+          <div class="kpi-value text-success" id="cost-kpi-free-rate">0%</div>
+          <div class="kpi-sub" id="cost-kpi-free-sub">首发主力组消化: 0 次</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-title">末级保底击穿率</div>
+          <div class="kpi-value text-danger" id="cost-kpi-leakage-rate">0%</div>
+          <div class="kpi-sub" id="cost-kpi-official-sub">保底组兜底: 0 次</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-title">后备梯队承接量</div>
+          <div class="kpi-value text-primary" id="cost-kpi-buffer-reqs">0</div>
+          <div class="kpi-sub" id="cost-kpi-buffer-sub">中转后备: 0 次</div>
+        </div>
+        <div class="card kpi-card">
+          <div class="kpi-title">专用节点承接量</div>
+          <div class="kpi-value text-warning" id="cost-kpi-dedicated-reqs">0</div>
+          <div class="kpi-sub" id="cost-kpi-dedicated-sub">专用轻量层: 0 次</div>
+        </div>
+      </section>
+
+      <!-- Main Chain Funnel Section -->
+      <section class="card section-card">
+        <div class="section-header">
+          <h3>🌊 主链流量梯队拦截与下渗漏斗 (Cost Absorption Funnel)</h3>
+          <span class="badge badge-info" id="cost-funnel-badge">基于近 24 小时调用与动态梯队</span>
+        </div>
+        <div class="funnel-container">
+          <div class="funnel-bar" id="cost-funnel-bar">
+            <!-- Dynamically populated segments -->
+          </div>
+          <div class="funnel-legend" id="cost-funnel-legend">
+            <!-- Dynamically populated legends -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Dedicated Pool Funnel Section -->
+      <section class="card section-card dedicated-funnel-card">
+        <div class="section-header">
+          <h3>🎯 专用节点流量承接 (Dedicated Pool Throughput)</h3>
+          <span class="badge badge-warning" id="dedicated-funnel-badge">独立于主链梯队</span>
+        </div>
+        <div class="funnel-container">
+          <div class="funnel-bar" id="cost-dedicated-funnel-bar">
+            <!-- Dynamically populated dedicated segments -->
+          </div>
+          <div class="funnel-legend" id="cost-dedicated-funnel-legend">
+            <!-- Dynamically populated dedicated legends -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Hourly Cost Spill Stacked Chart -->
+      <section class="card section-card">
+        <div class="section-header">
+          <h3 id="cost-hourly-title">🕒 24 小时各梯队成本溢出画像 (Hourly Tier Spillover)</h3>
+          <span class="badge badge-info">查看哪几个时段在发生向下击穿</span>
+        </div>
+        <div class="stacked-chart-container" id="cost-stacked-bars">
+          <!-- 24 stacked bars -->
+        </div>
+        <div class="stacked-legend">
+          <span class="legend-item"><span class="legend-dot seg-free"></span> 首发主力层 (Primary)</span>
+          <span class="legend-item"><span class="legend-dot seg-fallback"></span> 中转后备层 (Buffer)</span>
+          <span class="legend-item"><span class="legend-dot seg-official"></span> 末级保底层 (Terminal)</span>
+          <span class="legend-item"><span class="legend-dot seg-relay"></span> 专用轻量层 (Dedicated)</span>
+        </div>
+      </section>
+
+      <!-- Smart Insights & Node ROI Ranking Grid -->
+      <div class="cost-grid-layout">
+        <!-- Smart Insights Card -->
+        <section class="card section-card">
+          <div class="section-header">
+            <h3>💡 智能降本诊断建议 (Smart Insights)</h3>
+          </div>
+          <div class="insights-list" id="cost-insights-list">
+            <div class="insight-item insight-info">正在分析调用数据...</div>
+          </div>
+        </section>
+
+        <!-- Contributors & Culprits Ranking -->
+        <section class="card section-card">
+          <div class="section-header">
+            <h3>🏆 梯队价值与损耗节点榜 (Node ROI)</h3>
+          </div>
+          <div class="ranking-split">
+            <div class="ranking-col">
+              <h4 class="ranking-title text-success">🏆 省钱功臣节点 TOP 5</h4>
+              <ul class="ranking-list" id="cost-top-contributors">
+                <li>暂无数据</li>
+              </ul>
+            </div>
+            <div class="ranking-col">
+              <h4 class="ranking-title text-danger">⚠️ 下渗损耗蛀虫 TOP 5</h4>
+              <ul class="ranking-list" id="cost-leakage-culprits">
+                <li>暂无数据</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Error Attribution & Hedging ROI Grid -->
+      <div class="cost-grid-layout" style="margin-top: 1.5rem;">
+        <!-- Error Attribution Card -->
+        <section class="card section-card">
+          <div class="section-header">
+            <h3>🎯 故障与熔断根因归因分析 (Failure Attribution)</h3>
+            <span class="badge badge-danger" id="error-attribution-total-badge">24h 报错 0 次</span>
+          </div>
+          <div id="error-categories-list" class="error-cat-list">
+            <!-- Categorized error progress bars -->
+          </div>
+          <h4 style="margin-top:1.25rem;font-size:0.9rem;color:var(--text-muted);margin-bottom:0.5rem;">高频报错节点故障画像 TOP 5</h4>
+          <div id="error-node-rankings" class="error-node-list">
+            <!-- Top failing nodes with primary error tag -->
+          </div>
+        </section>
+
+        <!-- Speculative Hedging & Racing ROI -->
+        <section class="card section-card">
+          <div class="section-header">
+            <h3>🐎 延迟对冲赛马与抢跑收益 (Hedging Racing ROI)</h3>
+            <span class="badge badge-info">长尾延迟并发竞速</span>
+          </div>
+          <div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 1rem;">
+            <div class="card kpi-card" style="padding:0.75rem;">
+              <div class="kpi-title">对冲竞速总数</div>
+              <div class="kpi-value text-primary" id="hedge-kpi-races">0 次</div>
+            </div>
+            <div class="card kpi-card" style="padding:0.75rem;">
+              <div class="kpi-title">备选反超胜率</div>
+              <div class="kpi-value text-success" id="hedge-kpi-overtake">0%</div>
+            </div>
+            <div class="card kpi-card" style="padding:0.75rem;">
+              <div class="kpi-title">累计抢回等待</div>
+              <div class="kpi-value text-accent" id="hedge-kpi-saved">0s</div>
+            </div>
+          </div>
+          <h4 style="font-size:0.9rem;color:var(--text-muted);margin-bottom:0.5rem;">最近对冲竞速流水记录</h4>
+          <ul class="ranking-list" id="hedge-events-list">
+            <li class="text-muted" style="padding:0.5rem;">暂无对冲事件触发</li>
+          </ul>
+        </section>
+      </div>
+    </main>
+
+    <!-- Tab 2: Visual Config Management -->
+    <main id="tab-nodes" class="tab-content">
+      <!-- Sticky Save Bar -->
+      <div class="config-save-bar">
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+          <span class="config-save-hint">💡 修改配置后请点击保存，部分配置项保存后自动热生效</span>
+          <button id="btn-export-config" class="btn btn-secondary btn-sm" title="导出当前配置为 JSON 文件">📤 导出</button>
+          <button id="btn-import-config" class="btn btn-secondary btn-sm" title="从 JSON 文件导入配置">📥 导入</button>
+          <input type="file" id="import-config-file" accept=".json" style="display:none;" />
+          <button id="btn-clear-members" class="btn btn-warning btn-sm" title="清空所有模型池成员">🗑️ 清空成员</button>
+        </div>
+        <button id="btn-save-config" class="btn btn-primary">💾 保存全部配置</button>
+      </div>
+
+      <!-- Card 1: Pool Members -->
+      <section class="card section-card config-card">
+        <div class="config-card-header" onclick="toggleConfigCard(this)">
+          <h3>🧩 模型池成员列表 <span class="config-card-count" id="member-count-badge">0 个成员</span></h3>
+          <div class="config-card-actions">
+            <button id="btn-import-providers" class="btn btn-secondary btn-sm" onclick="event.stopPropagation()" title="一键导入 AstrBot 中已配置的对话模型 Provider">📥 导入 Provider</button>
+            <button id="btn-add-member" class="btn btn-secondary btn-sm" onclick="event.stopPropagation()">➕ 添加成员</button>
+            <span class="config-card-toggle">▼</span>
+          </div>
+        </div>
+        <div class="config-card-body">
+          <p class="config-card-desc">添加 AstrBot 中已配置好的真实 Provider 作为模型池成员。支持为同一节点分配多个分组（逗号分隔），实现跨池共享。拖拽 ⠿ 手柄可调整顺序。</p>
+          <div class="table-responsive">
+            <table class="data-table members-table">
+              <thead>
+                <tr>
+                  <th class="th-drag">⠿</th>
+                  <th>启用</th>
+                  <th>Provider</th>
+                  <th>模型组 (Group)</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="members-editor-tbody">
+                <!-- Rendered via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 2: Fallback Chain & Alias -->
+      <section class="card section-card config-card">
+        <div class="config-card-header" onclick="toggleConfigCard(this)">
+          <h3>🔄 跨组回退链与别名映射</h3>
+          <div class="config-card-actions">
+            <button id="btn-add-fallback" class="btn btn-secondary btn-sm" onclick="event.stopPropagation()">➕ 添加回退规则</button>
+            <span class="config-card-toggle">▼</span>
+          </div>
+        </div>
+        <div class="config-card-body">
+          <p class="config-card-desc">定义模型组之间的降级回退顺序，以及外部请求模型名到内部模型组的别名映射。</p>
+          <h4 class="config-subsection-title">跨组回退顺序 (Fallback Chain)</h4>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>源模型组</th>
+                  <th>→</th>
+                  <th>降级目标组</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="fallbacks-editor-tbody">
+                <!-- Rendered via JS -->
+              </tbody>
+            </table>
+          </div>
+          <h4 class="config-subsection-title" style="margin-top:1.5rem;">模型组别名映射 (Group Alias)</h4>
+          <div style="margin-bottom:0.5rem;">
+            <button id="btn-add-alias" class="btn btn-secondary btn-sm">➕ 添加别名规则</button>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>外部请求模型/别名</th>
+                  <th>→</th>
+                  <th>映射目标组</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="alias-editor-tbody">
+                <!-- Rendered via JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 3: Scheduling & Timeout -->
+      <section class="card section-card config-card">
+        <div class="config-card-header" onclick="toggleConfigCard(this)">
+          <h3>⚙️ 调度策略与超时控制</h3>
+          <span class="config-card-toggle">▼</span>
+        </div>
+        <div class="config-card-body">
+          <p class="config-card-desc">控制模型选择策略、失败切换、以及各级超时限制。</p>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>调度策略 (Strategy)</label>
+              <select id="cfg-strategy" class="form-control">
+                <option value="usage-based-routing-v2">usage-based-routing-v2 (并发负载与权重综合调度)</option>
+                <option value="least_busy">least_busy (纯最闲优先，最低并发)</option>
+                <option value="latency_based">latency_based (纯延迟优先，最快响应)</option>
+                <option value="weighted_random">weighted_random (纯加权随机)</option>
+                <option value="round_robin">round_robin (顺次轮询)</option>
+                <option value="ordered_failover">ordered_failover (顺位首选)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>单次最多尝试节点数</label>
+              <input type="number" id="cfg-max-attempts" class="form-control" value="5" min="1" max="10" />
+              <small class="form-hint">单次请求在组内最多尝试的节点数（建议 5 次，防止全量死循环重试）</small>
+            </div>
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-failover" checked />
+                <span>失败自动切换 (Failover)</span>
+              </label>
+              <small class="form-hint">当前成员报错或超时时，在同一次请求内继续尝试下一成员</small>
+            </div>
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-suppress-error" checked />
+                <span>全失败时静默吞并错误</span>
+              </label>
+              <small class="form-hint">所有成员均失败时返回空回复，不向群聊喷出英文报错红字</small>
+            </div>
+            <div class="form-group">
+              <label>重试最小等待间隔 (秒)</label>
+              <input type="number" id="cfg-retry-after" class="form-control" value="0" step="0.5" min="0" max="30" />
+              <small class="form-hint">失败后重试下一节点前的最小等待秒数（默认 0 不等待）</small>
+            </div>
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-weighted-failover" />
+                <span>组内加权重试 (Weighted Failover)</span>
+              </label>
+              <small class="form-hint">同组内失败时按权重重新选择节点，而非立即跨组回退</small>
+            </div>
+            <div class="form-group">
+              <label>非流式单节点总超时 (秒)</label>
+              <input type="number" id="cfg-request-timeout" class="form-control" value="50" min="5" max="300" />
+              <small class="form-hint">每个池成员非流式调用的超时限制（默认 50 秒，容忍长文本生成并防止死节点卡死）</small>
+            </div>
+            <div class="form-group">
+              <label>流式首包等待超时 (秒)</label>
+              <input type="number" id="cfg-stream-timeout" class="form-control" value="26" min="3" max="120" />
+              <small class="form-hint">等待首个 Token 的阶梯基准时间（默认 26s），超时立即切换下一节点</small>
+            </div>
+            <div class="form-group">
+              <label>生成断流停滞看门狗 (秒)</label>
+              <input type="number" id="cfg-stall-timeout" class="form-control" value="10" min="2" max="60" />
+              <small class="form-hint">输出过程中单次 chunk 停滞超过该秒数即判定上游断流，主动截断报错（默认 10s）</small>
+            </div>
+            <div class="form-group">
+              <label>全局耗时预算硬上限 (秒)</label>
+              <input type="number" id="cfg-global-timeout" class="form-control" value="120.0" step="0.5" min="5" max="300" />
+              <small class="form-hint">整轮调用的全局总耗时硬上限（默认 120 秒）。时间吃紧时自动跳过中间慢组，顺序快连保底组抢答</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 4: Circuit Breaker & Error Tolerance -->
+      <section class="card section-card config-card">
+        <div class="config-card-header" onclick="toggleConfigCard(this)">
+          <h3>🛡️ 熔断冷却与错误容忍策略</h3>
+          <span class="config-card-toggle">▼</span>
+        </div>
+        <div class="config-card-body">
+          <p class="config-card-desc">控制各类错误触发熔断的阈值与冷却时长，平衡快速故障转移与避免偶发抖动误杀。</p>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>常规熔断冷却时长 (秒)</label>
+              <input type="number" id="cfg-cooldown-seconds" class="form-control" value="1800" min="0" max="86400" />
+              <small class="form-hint">触发熔断后的常规封锁时长（默认 1800s / 30 分钟）</small>
+            </div>
+            <div class="form-group">
+              <label>429 限流短冷却时长 (秒)</label>
+              <input type="number" id="cfg-ratelimit-cooldown" class="form-control" value="1800" min="0" max="86400" />
+              <small class="form-hint">上游返回 429 限频时的封禁冷却时间（默认 1800 秒）</small>
+            </div>
+            <div class="form-group">
+              <label>同模型防限频最小间隔 (秒)</label>
+              <input type="number" id="cfg-model-request-interval" class="form-control" value="3.0" step="0.5" min="0" max="60" />
+              <small class="form-hint">短时间内优先分流至同组其他模型（防 429）；设为 0 不限制</small>
+            </div>
+            <div class="form-group">
+              <label>每日配额重置整点 (小时)</label>
+              <input type="number" id="cfg-daily-reset-hour" class="form-control" value="2" min="0" max="23" />
+              <small class="form-hint">每天该整点自动唤醒解冻深度休眠节点（默认 2 点）</small>
+            </div>
+          </div>
+          <h4 class="config-subsection-title">精细化错误容忍次数 (Allowed Fails)</h4>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>限流/欠费 (429) 容忍次数</label>
+              <input type="number" id="cfg-ratelimit-fails" class="form-control" value="0" min="0" max="5" />
+              <small class="form-hint">建议 0 次（一旦 429 立即短时冷却）</small>
+            </div>
+            <div class="form-group">
+              <label>超时 (Timeout) 容忍次数</label>
+              <input type="number" id="cfg-timeout-fails" class="form-control" value="2" min="1" max="5" />
+              <small class="form-hint">连续超时达到该次数后进入冷却</small>
+            </div>
+            <div class="form-group">
+              <label>Bad Request (400) 容忍次数</label>
+              <input type="number" id="cfg-badrequest-fails" class="form-control" value="2" min="1" max="5" />
+              <small class="form-hint">400 请求错误容忍次数</small>
+            </div>
+            <div class="form-group">
+              <label>⚡ 激进节点失败容忍次数</label>
+              <input type="number" id="cfg-aggressive-fails" class="form-control" value="5" min="1" max="10" />
+              <small class="form-hint">激进节点容忍的连续失败次数（默认 5 次），达到阈值才熔断</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 5: Hedging & Congestion Promotion -->
+      <section class="card section-card config-card">
+        <div class="config-card-header" onclick="toggleConfigCard(this)">
+          <h3>⚡ 延迟对冲与拥堵提权</h3>
+          <span class="config-card-toggle">▼</span>
+        </div>
+        <div class="config-card-body">
+          <p class="config-card-desc">防长尾延迟与高峰拥堵的自动化高级调度策略。</p>
+          <div class="form-grid">
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-enable-hedging" />
+                <span>启用延迟对冲赛马 (Hedging)</span>
+              </label>
+              <small class="form-hint">当主节点响应超过对冲阈值时，自动拉起同组备选节点并发竞速，取最先返回者</small>
+            </div>
+            <div class="form-group">
+              <label>延迟对冲触发阈值 (秒)</label>
+              <input type="number" id="cfg-hedging-delay" class="form-control" value="24.0" step="0.5" min="1" max="60" />
+              <small class="form-hint">主节点请求发出后超过此秒数未返回时触发并发对冲（默认 24.0 秒）</small>
+            </div>
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-enable-congestion" />
+                <span>启用忙时拥堵自动提权 (Congestion Promotion)</span>
+              </label>
+              <small class="form-hint">当主模型组大面积熔断或平均延迟严重恶化时，自动将后备保底层顺序向下提权为主力（保留轻量探针探活）</small>
+            </div>
+            <div class="form-group">
+              <label>拥堵判定延迟阈值 (秒)</label>
+              <input type="number" id="cfg-congestion-threshold" class="form-control" value="40.0" step="0.5" min="3" max="120" />
+              <small class="form-hint">主模型组可用节点前几名平均耗时超过该秒数即判定进入高峰拥堵（默认 40.0 秒）</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Card 6: Dedicated Pools & Misc -->
+      <section class="card section-card config-card">
+        <div class="config-card-header" onclick="toggleConfigCard(this)">
+          <h3>🔑 专用节点池与杂项设置 <span class="config-card-count" id="dedicated-pools-count">0 个专用池</span></h3>
+          <div class="config-card-actions">
+            <button id="btn-add-dedicated-pool" class="btn btn-secondary btn-sm" onclick="event.stopPropagation()">➕ 添加专用池</button>
+            <span class="config-card-toggle">▼</span>
+          </div>
+        </div>
+        <div class="config-card-body">
+          <p class="config-card-desc">专用节点池独立于主链梯队，用于轻度判定、意图识别、总结压缩等场景。每个专用池有自己的 Provider ID、分组、调度策略和超时设置。在"模型池成员"中为对应分组添加真实 Provider 即可。</p>
+          <div class="table-responsive">
+            <table class="data-table" id="dedicated-pools-table">
+              <thead>
+                <tr>
+                  <th>启用</th>
+                  <th>Provider ID</th>
+                  <th>分组 (Group)</th>
+                  <th>模型名 (Model)</th>
+                  <th>严格隔离</th>
+                  <th>调度策略</th>
+                  <th>超时(s)</th>
+                  <th>流式超时(s)</th>
+                  <th>最大尝试</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="dedicated-pools-tbody">
+                <!-- Rendered via JS -->
+              </tbody>
+            </table>
+          </div>
+          <div id="dedicated-pools-empty" style="display:none;padding:0.75rem;text-align:center;color:var(--text-muted);font-size:0.85rem;">
+            暂无专用节点池。点击"添加专用池"创建一个（旧的第二模型池配置会自动迁移）。
+          </div>
+          <h4 class="config-subsection-title">杂项设置</h4>
+          <div class="form-grid">
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-verbose-logging" />
+                <span>详细调度日志 (Verbose Logging)</span>
+              </label>
+              <small class="form-hint">记录每次选择、尝试序号与成功成员；失败日志始终保留</small>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Tab 3: Request Logs -->
+    <main id="tab-logs" class="tab-content">
+      <section class="card section-card">
+        <div class="section-header" style="flex-wrap:wrap;gap:0.75rem;">
+          <div>
+            <h3>📜 请求流水与消息反查</h3>
+            <span id="log-current-filter-badge" class="badge badge-info" style="display:none;margin-top:0.25rem;"></span>
+          </div>
+          <div class="filter-bar" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
+            <select id="log-node-filter" class="form-control" style="width: auto;">
+              <option value="">全部模型/节点</option>
+            </select>
+            <select id="log-status-filter" class="form-control" style="width: auto;">
+              <option value="">全部状态</option>
+              <option value="SUCCESS">仅成功 (SUCCESS)</option>
+              <option value="FAILED">仅失败 (FAILED)</option>
+            </select>
+            <div style="display:flex;align-items:center;gap:0.25rem;">
+              <label style="font-size:0.75rem;color:var(--text-muted);">从</label>
+              <input type="datetime-local" id="log-start-time" class="form-control" style="width:auto;font-size:0.8rem;padding:0.25rem 0.4rem;" />
+              <label style="font-size:0.75rem;color:var(--text-muted);">至</label>
+              <input type="datetime-local" id="log-end-time" class="form-control" style="width:auto;font-size:0.8rem;padding:0.25rem 0.4rem;" />
+            </div>
+            <input type="text" id="log-keyword-filter" class="form-control" placeholder="关键词/错误检索" style="width:130px;font-size:0.8rem;" />
+            <button id="btn-search-logs" class="btn btn-primary btn-sm">🔍 搜索</button>
+            <button id="btn-clear-log-filters" class="btn btn-secondary btn-sm">清空</button>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>请求时间 (本地时间)</th>
+                <th>模型组</th>
+                <th>命中节点</th>
+                <th>模式</th>
+                <th>首字耗时 (TTFT)</th>
+                <th>总耗时</th>
+                <th>状态</th>
+                <th>错误/结果详情</th>
+              </tr>
+            </thead>
+            <tbody id="logs-tbody">
+              <tr><td colspan="9" class="text-center">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="pagination-bar" style="display:flex;justify-content:space-between;align-items:center;margin-top:1rem;padding-top:0.75rem;border-top:1px solid var(--border-color);">
+          <div style="font-size:0.8rem;color:var(--text-muted);" id="pagination-info">
+            共 0 条记录 · 第 1 / 1 页
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <button id="btn-prev-page" class="btn btn-secondary btn-sm" disabled>◀ 上一页</button>
+            <span id="pagination-current-page" style="font-size:0.85rem;font-weight:600;min-width:24px;text-align:center;">1</span>
+            <button id="btn-next-page" class="btn btn-secondary btn-sm" disabled>下一页 ▶</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Tab 5: Plugin Management -->
+    <main id="tab-manage" class="tab-content">
+      <section class="card section-card">
+        <div class="section-header">
+          <h3>⚙️ 插件管理与数据维护</h3>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1.25rem;padding:0.5rem 0;">
+          <!-- Intro Guide -->
+          <div class="manage-card">
+            <h4>📖 使用指引</h4>
+            <p>首次使用或需要复习操作流程时，可重新打开使用指引窗口。</p>
+            <button id="btn-show-intro" class="btn btn-primary">📖 打开使用指引</button>
+          </div>
+
+          <!-- Config Import/Export -->
+          <div class="manage-card">
+            <h4>📤 配置导入导出</h4>
+            <p>导出当前完整配置为 JSON 文件，或从之前导出的文件恢复配置。</p>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+              <button id="btn-manage-export" class="btn btn-secondary">📤 导出配置</button>
+              <button id="btn-manage-import" class="btn btn-secondary">📥 导入配置</button>
+              <input type="file" id="manage-import-file" accept=".json" style="display:none;" />
+            </div>
+          </div>
+
+          <!-- Clear Members -->
+          <div class="manage-card">
+            <h4>🗑️ 清空模型池成员</h4>
+            <p>移除所有模型池成员。建议先导出配置作为备份。专用节点池配置不受影响。</p>
+            <button id="btn-manage-clear" class="btn btn-warning">🗑️ 清空所有成员</button>
+          </div>
+
+          <!-- Reset All Config -->
+          <div class="manage-card manage-card-danger">
+            <h4>⚠️ 重置所有配置</h4>
+            <p>将插件配置恢复为默认值。所有成员、回退链、专用池、调度参数都将被清空或重置。此操作不可撤销，请务必先导出配置。</p>
+            <button id="btn-manage-reset" class="btn btn-danger">⚠️ 重置所有配置为默认值</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Intro Modal (Step Wizard) -->
+    <div id="intro-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-box intro-wizard-box">
+        <!-- Step 1: Welcome + Import -->
+        <div class="intro-wizard-step" data-step="1">
+          <h3 class="intro-wizard-title">📖 欢迎使用 LLM 模型池</h3>
+          <p class="intro-wizard-desc">把你的模型当成人才来管理：选人、考核、淘汰、提拔，全部交给算法。</p>
+          <div class="intro-wizard-body">
+            <p class="intro-wizard-hint">第一步：把 AstrBot 中已配置的对话模型导入模型池。</p>
+            <button id="intro-import-btn" class="btn btn-primary" style="width:100%;">📥 一键导入 AstrBot Provider</button>
+            <p class="intro-wizard-subhint">导入后可在「🎛️ 模型池配置管理」中调整分组、排序和高级参数。</p>
+            <p class="intro-wizard-subhint">也可以跳过导入，稍后手动添加成员。</p>
+          </div>
+        </div>
+
+        <!-- Step 2: Skip hint -->
+        <div class="intro-wizard-step" data-step="2" style="display:none;">
+          <h3 class="intro-wizard-title">⚙️ 高级配置（自行设置）</h3>
+          <p class="intro-wizard-desc">以下配置不影响首次使用，随时可在「🎛️ 模型池配置管理」中调整：</p>
+          <div class="intro-wizard-body">
+            <ul class="intro-wizard-list">
+              <li><strong>模型组与回退链</strong> — 为成员设置 tier1/tier2/tier3 分组，配置降级顺序</li>
+              <li><strong>专用节点池</strong> — 独立的轻量判定/意图识别池</li>
+              <li><strong>调度策略与超时</strong> — 负载均衡、熔断冷却、延迟对冲等</li>
+            </ul>
+            <p class="intro-wizard-subhint">默认配置已可正常工作，进阶调优随时再做。</p>
+          </div>
+        </div>
+
+        <!-- Step 3: Select llm-pool in AstrBot -->
+        <div class="intro-wizard-step" data-step="3" style="display:none;">
+          <h3 class="intro-wizard-title">✅ 最后一步：在 AstrBot 中选择模型池</h3>
+          <p class="intro-wizard-desc">需要在 AstrBot 管理面板中将 <code>llm-pool</code> 设为对话模型：</p>
+          <div class="intro-wizard-body">
+            <div class="intro-wizard-guide">
+              <p class="intro-wizard-hint">操作步骤：</p>
+              <ol class="intro-wizard-ol">
+                <li>在 AstrBot 管理面板<strong>左侧导航栏</strong>中点击「<strong>配置文件</strong>」</li>
+                <li>找到「<strong>对话模型</strong>」或「<strong>回退对话模型</strong>」</li>
+                <li>选择 <code>llm-pool</code> 作为模型</li>
+                <li>点击保存</li>
+              </ol>
+            </div>
+            <p class="intro-wizard-subhint">专用节点池（如 <code>light_llm_pool</code>）也可在需要时选择。</p>
+          </div>
+        </div>
+
+        <!-- Footer: progress dots + buttons -->
+        <div class="intro-wizard-footer">
+          <div class="intro-wizard-dots" id="intro-dots">
+            <span class="intro-dot active"></span>
+            <span class="intro-dot"></span>
+            <span class="intro-dot"></span>
+          </div>
+          <div class="intro-wizard-buttons">
+            <button id="intro-btn-skip" class="btn btn-secondary btn-sm">跳过</button>
+            <button id="intro-btn-prev" class="btn btn-secondary btn-sm" style="display:none;">← 上一步</button>
+            <button id="intro-btn-next" class="btn btn-primary btn-sm">下一步 →</button>
+            <button id="intro-btn-finish" class="btn btn-primary btn-sm" style="display:none;">开始使用 ✅</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="confirm-modal" class="modal-overlay" style="display: none;">
+      <div class="modal-box">
+        <h4 id="confirm-modal-title" style="font-size: 1.1rem; margin-bottom: 0.5rem;">提示</h4>
+        <p id="confirm-modal-message" style="margin: 0.75rem 0 1.25rem; font-size: 0.88rem; color: var(--text-muted); line-height: 1.5;"></p>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+          <button id="confirm-modal-cancel" class="btn btn-secondary">取消</button>
+          <button id="confirm-modal-ok" class="btn btn-warning">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
