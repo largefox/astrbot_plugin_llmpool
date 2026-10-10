@@ -716,8 +716,6 @@ class LLMPoolPlugin(star.Star):
             f"• 24h 请求总量: {tot_req} 次 (成功: {suc_req} | 失败: {fail_req})",
             f"• 24h 服务可用率: {avail_pct}%",
             f"• 平均总耗时: {avg_lat} ms",
-            "• 决策模型fox-decision：开启",
-            "• 分流模型fox-metrics：开启",
             f"• 平均首字(TTFT): {avg_ttft} ms",
             f"• 节点健康概况: 正常 {healthy_nodes_count} / 熔断 {len(open_nodes)} / 试探 {len(half_open_nodes)} (总数 {total_nodes})",
         ]
