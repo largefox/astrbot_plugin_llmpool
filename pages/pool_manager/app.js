@@ -1081,6 +1081,11 @@ async function loadConfig() {
     document.getElementById("cfg-enable-congestion").checked = currentConfig.enable_congestion_promotion === true;
     document.getElementById("cfg-congestion-threshold").value = currentConfig.congestion_latency_threshold ?? 40.0;
 
+    document.getElementById("cfg-api-server-enabled").checked = currentConfig.api_server_enabled === true;
+    document.getElementById("cfg-api-server-port").value = currentConfig.api_server_port ?? 5120;
+    document.getElementById("cfg-api-server-host").value = currentConfig.api_server_host || "0.0.0.0";
+    document.getElementById("cfg-api-server-key").value = currentConfig.api_server_key || "";
+
     document.getElementById("cfg-verbose-logging").checked = Boolean(currentConfig.verbose_logging);
 
     // Render dedicated pools table
@@ -1817,6 +1822,10 @@ document.getElementById("btn-save-config").addEventListener("click", async () =>
     hedging_delay_seconds: parseFloat(document.getElementById("cfg-hedging-delay").value) || 24.0,
     enable_congestion_promotion: document.getElementById("cfg-enable-congestion").checked,
     congestion_latency_threshold: parseFloat(document.getElementById("cfg-congestion-threshold").value) || 40.0,
+    api_server_enabled: document.getElementById("cfg-api-server-enabled").checked,
+    api_server_port: parseInt(document.getElementById("cfg-api-server-port").value, 10) || 5120,
+    api_server_host: (document.getElementById("cfg-api-server-host").value || "0.0.0.0").trim(),
+    api_server_key: (document.getElementById("cfg-api-server-key").value || "").trim(),
     dedicated_pools: collectDedicatedPools(),
     verbose_logging: document.getElementById("cfg-verbose-logging").checked,
     fallbacks,

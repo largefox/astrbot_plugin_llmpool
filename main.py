@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,11 @@ from .metrics_store import MetricsStore
 from .routing import UsageBasedRouter, normalize_members
 from .runtime import bind_runtime, unbind_runtime
 from .vision_utils import mask_node_id
+
+try:
+    from .api_server import APIServer
+except ImportError:
+    from api_server import APIServer
 
 PLUGIN_NAME = "astrbot_plugin_llmpool"
 FALLBACK_PLUGIN_NAME = "astrbot_plugin_llm_pool"
@@ -131,6 +137,51 @@ class LLMPoolPlugin(star.Star):
             key_manager=self.key_manager,
         )
         self._register_web_apis()
+
+        self.api_server: APIServer | None = None
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._sync_api_server())
+        except RuntimeError:
+            pass
+
+    async def _sync_api_server(self) -> None:
+        """Start, stop, or reload the external OpenAI-compatible API server based on configuration."""
+        enabled = bool(self.config.get("api_server_enabled", False))
+        host = str(self.config.get("api_server_host", "0.0.0.0") or "0.0.0.0").strip()
+        port = int(self.config.get("api_server_port", 5120) or 5120)
+        api_key = str(self.config.get("api_server_key", "") or "").strip()
+
+        if not enabled:
+            await self._stop_api_server()
+            return
+
+        if (
+            self.api_server is not None
+            and self.api_server.runner is not None
+            and self.api_server.host == host
+            and self.api_server.port == port
+            and self.api_server.api_key == api_key
+        ):
+            return
+
+        await self._stop_api_server()
+        try:
+            self.api_server = APIServer(self.context, api_key=api_key)
+            await self.api_server.start(host=host, port=port)
+            logger.info("llm pool: external OpenAI API server running on %s:%d", host, port)
+        except Exception as exc:
+            logger.exception("llm pool: failed to start external API server on %s:%d: %s", host, port, exc)
+
+    async def _stop_api_server(self) -> None:
+        """Stop and cleanup the external API server."""
+        if self.api_server is not None:
+            try:
+                await self.api_server.stop()
+            except Exception as exc:
+                logger.debug("llm pool: error stopping API server: %s", exc)
+            finally:
+                self.api_server = None
 
     def _register_web_apis(self) -> None:
         routes = [
@@ -429,10 +480,17 @@ class LLMPoolPlugin(star.Star):
                     )
                     seen_pids.add(pid_str)
 
+        api_server_status = {
+            "running": self.api_server is not None and self.api_server.site is not None,
+            "host": getattr(self.api_server, "host", "0.0.0.0"),
+            "port": getattr(self.api_server, "port", 5120),
+        }
+
         return json_response(
             {
                 "config": dict(self.config),
                 "available_providers": available_providers,
+                "api_server_status": api_server_status,
             }
         )
 
@@ -683,6 +741,12 @@ class LLMPoolPlugin(star.Star):
                         json.dump(dict(self.config), f, indent=2, ensure_ascii=False)
                 except Exception as inner_exc:
                     logger.error("llm pool: fallback config write failed: %s", inner_exc)
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._sync_api_server())
+        except RuntimeError:
+            pass
 
     async def api_save_config(self) -> Any:
         payload = await request.json(default={})
@@ -962,6 +1026,7 @@ class LLMPoolPlugin(star.Star):
         )
 
     async def terminate(self) -> None:
+        await self._stop_api_server()
         unbind_runtime(self.context)
 
         manager = self.context.provider_manager

@@ -295,5 +295,29 @@
         }
       }
     }
+  },
+  "api_server_enabled": {
+    "description": "开启外部 OpenAI 兼容 API 服务",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后将在指定端口启动一个独立的 OpenAI 兼容 API 服务，供外部程序（如 NextChat、ChatBox、Open WebUI、Cursor 等）直接调用模型池。"
+  },
+  "api_server_port": {
+    "description": "API 服务监听端口",
+    "type": "int",
+    "default": 5120,
+    "hint": "API 服务的监听端口（默认 5120）。"
+  },
+  "api_server_host": {
+    "description": "API 服务监听地址",
+    "type": "string",
+    "default": "0.0.0.0",
+    "hint": "API 服务的监听主机地址（0.0.0.0 允许局域网/公网访问，127.0.0.1 仅限本机）。"
+  },
+  "api_server_key": {
+    "description": "API 访问认证 Key (Bearer Token)",
+    "type": "string",
+    "default": "",
+    "hint": "外部请求访问 API 的安全密钥（可选）。若填写，客户端请求头必须携带 'Authorization: Bearer <key>'；留空则免密调用。"
   }
 }

@@ -638,6 +638,31 @@
           <div id="dedicated-pools-empty" style="display:none;padding:0.75rem;text-align:center;color:var(--text-muted);font-size:0.85rem;">
             暂无专用节点池。点击"添加专用池"创建一个（旧的第二模型池配置会自动迁移）。
           </div>
+          <h4 class="config-subsection-title">🌐 对外 OpenAI 兼容服务 (API Server)</h4>
+          <div class="form-grid">
+            <div class="form-group" style="justify-content: center;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-top: 0.5rem;">
+                <input type="checkbox" id="cfg-api-server-enabled" />
+                <span>开启外部 OpenAI 兼容服务</span>
+              </label>
+              <small class="form-hint">开启后启动独立 HTTP 服务，供 NextChat、ChatBox、Open WebUI、Cursor 等外部程序直接调用模型池</small>
+            </div>
+            <div class="form-group">
+              <label>服务监听端口 (Port)</label>
+              <input type="number" id="cfg-api-server-port" class="form-control" value="5120" min="1" max="65535" />
+              <small class="form-hint">外部服务监听端口（默认 5120）</small>
+            </div>
+            <div class="form-group">
+              <label>监听主机地址 (Host)</label>
+              <input type="text" id="cfg-api-server-host" class="form-control" value="0.0.0.0" placeholder="0.0.0.0" />
+              <small class="form-hint">0.0.0.0 允许局域网/公网访问，127.0.0.1 仅限本机</small>
+            </div>
+            <div class="form-group">
+              <label>认证密钥 (API Key / Bearer Token)</label>
+              <input type="text" id="cfg-api-server-key" class="form-control" placeholder="留空则免密调用" />
+              <small class="form-hint">若填写，客户端请求需携带 Header 'Authorization: Bearer &lt;key&gt;'</small>
+            </div>
+          </div>
           <h4 class="config-subsection-title">杂项设置</h4>
           <div class="form-grid">
             <div class="form-group" style="justify-content: center;">
