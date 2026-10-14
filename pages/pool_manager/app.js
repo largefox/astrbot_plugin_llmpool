@@ -1116,10 +1116,7 @@ function renderMembers(members) {
   const tbody = document.getElementById("members-editor-tbody");
   tbody.innerHTML = "";
 
-  // Build provider dropdown options from availableProviders (ID only, no model name)
-  const providerOpts = availableProviders.map(
-    (p) => `<option value="${escapeHtml(p.provider_id)}">${escapeHtml(p.provider_id)}</option>`
-  ).join("");
+  const knownPids = new Set(availableProviders.map((p) => p.provider_id));
 
   members.forEach((m, idx) => {
     const tr = document.createElement("tr");
@@ -1127,8 +1124,19 @@ function renderMembers(members) {
     tr.draggable = true;
     tr.dataset.idx = idx;
 
-    const pid = escapeHtml(m.provider_id || "");
+    const rawPid = (m.provider_id || "").trim();
+    const pid = escapeHtml(rawPid);
     const grp = escapeHtml(m.group_name || "default");
+
+    // Build options ensuring the current member's PID is always available
+    let customOptionHtml = "";
+    if (rawPid && !knownPids.has(rawPid)) {
+      customOptionHtml = `<option value="${pid}">${pid} (当前配置)</option>`;
+    }
+
+    const providerOpts = availableProviders.map(
+      (p) => `<option value="${escapeHtml(p.provider_id)}">${escapeHtml(p.provider_id)}</option>`
+    ).join("");
 
     tr.innerHTML = `
       <td class="td-drag" title="拖拽排序">⠿</td>
@@ -1136,7 +1144,9 @@ function renderMembers(members) {
       <td>
         <select class="form-control m-pid">
           <option value="">— 选择 Provider —</option>
+          ${customOptionHtml}
           ${providerOpts}
+          <option value="__custom__">➕ 手动输入 Provider ID...</option>
         </select>
       </td>
       <td><input type="text" class="form-control m-group" value="${grp}" placeholder="tier1, light_llm_pool" /></td>
@@ -1148,7 +1158,27 @@ function renderMembers(members) {
 
     // Set selected provider after innerHTML
     const pidSelect = tr.querySelector(".m-pid");
-    if (pid) pidSelect.value = pid;
+    if (rawPid) {
+      pidSelect.value = rawPid;
+    }
+
+    // Support typing custom provider ID
+    pidSelect.addEventListener("change", () => {
+      if (pidSelect.value === "__custom__") {
+        const customVal = prompt("请输入 Provider ID（例如 amd/DeepSeek-V4.1-Flash）：");
+        if (customVal && customVal.trim()) {
+          const cleanVal = customVal.trim();
+          const newOpt = document.createElement("option");
+          newOpt.value = cleanVal;
+          newOpt.textContent = cleanVal;
+          pidSelect.insertBefore(newOpt, pidSelect.lastElementChild);
+          pidSelect.value = cleanVal;
+          knownPids.add(cleanVal);
+        } else {
+          pidSelect.value = rawPid || "";
+        }
+      }
+    });
 
     // Build collapsible advanced row
     const advTr = document.createElement("tr");
@@ -1436,6 +1466,7 @@ function collectDedicatedPools() {
     const id = row.querySelector(".dp-id").value.trim();
     if (!enabled || !id) return;
     pools.push({
+      __template_key: "pool",
       id,
       group: row.querySelector(".dp-group").value.trim() || id,
       model_name: row.querySelector(".dp-model").value.trim() || `${id}-router`,

@@ -277,6 +277,7 @@ body {
 /* Table */
 .table-responsive {
   overflow-x: auto;
+  padding-bottom: 0.5rem;
 }
 
 .data-table {
@@ -1076,14 +1077,15 @@ body {
 .config-card-body {
   padding: 1rem 1.25rem 1.25rem;
   transition: max-height 0.3s ease, opacity 0.2s ease, padding 0.3s ease;
-  max-height: 2000px;
+  max-height: none;
   opacity: 1;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .config-card.collapsed .config-card-body {
   max-height: 0;
   opacity: 0;
+  overflow: hidden;
   padding-top: 0;
   padding-bottom: 0;
 }

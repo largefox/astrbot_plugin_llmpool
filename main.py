@@ -362,9 +362,11 @@ class LLMPoolPlugin(star.Star):
         })
 
     async def api_get_config(self) -> Any:
-        manager = self.context.provider_manager
-        inst_map = getattr(manager, "inst_map", {})
+        manager = getattr(self.context, "provider_manager", None)
+        inst_map = getattr(manager, "inst_map", {}) if manager else {}
         available_providers = []
+        seen_pids = set()
+
         # Exclude primary pool and all dedicated pool IDs
         excluded_ids = {POOL_PROVIDER_ID}
         try:
@@ -374,17 +376,59 @@ class LLMPoolPlugin(star.Star):
         for p in resolve_dedicated_pools(self.config):
             excluded_ids.add(p["id"])
         excluded_ids.discard("")
+
+        # 1. Collect from inst_map (live instances)
         if isinstance(inst_map, dict):
             for pid, prov in inst_map.items():
-                if pid in excluded_ids:
+                pid_str = str(pid).strip()
+                if not pid_str or pid_str in excluded_ids or pid_str in seen_pids:
                     continue
                 available_providers.append(
                     {
-                        "provider_id": pid,
+                        "provider_id": pid_str,
                         "type": str(getattr(prov, "provider_config", {}).get("type") or ""),
                         "model": str(getattr(prov, "get_model", lambda: "")() or ""),
                     }
                 )
+                seen_pids.add(pid_str)
+
+        # 2. Collect from AstrBot default_conf (configured providers that may not be in inst_map yet)
+        try:
+            acm = getattr(self.context, "astrbot_config_mgr", None)
+            default_conf = getattr(acm, "default_conf", None)
+            if default_conf is not None:
+                for k in ("provider", "providers"):
+                    p_list = default_conf.get(k, []) if hasattr(default_conf, "get") else []
+                    if isinstance(p_list, list):
+                        for item in p_list:
+                            if isinstance(item, dict):
+                                pid_str = str(item.get("id") or item.get("provider") or "").strip()
+                                if pid_str and pid_str not in excluded_ids and pid_str not in seen_pids:
+                                    available_providers.append(
+                                        {
+                                            "provider_id": pid_str,
+                                            "type": str(item.get("type") or ""),
+                                            "model": str(item.get("model") or ""),
+                                        }
+                                    )
+                                    seen_pids.add(pid_str)
+        except Exception:
+            pass
+
+        # 3. Ensure all currently configured pool members are in available_providers so they always display
+        for m in self.config.get("members", []):
+            if isinstance(m, dict):
+                pid_str = str(m.get("provider_id") or "").strip()
+                if pid_str and pid_str not in seen_pids:
+                    available_providers.append(
+                        {
+                            "provider_id": pid_str,
+                            "type": "configured",
+                            "model": "",
+                        }
+                    )
+                    seen_pids.add(pid_str)
+
         return json_response(
             {
                 "config": dict(self.config),
@@ -395,12 +439,12 @@ class LLMPoolPlugin(star.Star):
     async def api_import_providers(self) -> Any:
         """One-click import AstrBot chat providers as pool members.
 
-        Reads all enabled chat_completion providers from the ProviderManager,
+        Reads all enabled chat_completion providers from the ProviderManager and config,
         excludes pool/dedicated IDs, and merges them into the existing members
         list (skipping duplicates by provider_id).
         """
-        manager = self.context.provider_manager
-        inst_map = getattr(manager, "inst_map", {})
+        manager = getattr(self.context, "provider_manager", None)
+        inst_map = getattr(manager, "inst_map", {}) if manager else {}
 
         # Build excluded IDs (primary pool + dedicated pools)
         excluded_ids = {POOL_PROVIDER_ID}
@@ -422,16 +466,18 @@ class LLMPoolPlugin(star.Star):
             if isinstance(m, dict)
         }
 
-        # Discover importable providers
+        # Non-chat provider types to ignore during import
+        ignored_types = {"tts", "stt", "whisper", "dall-e", "embedding", "embeddings", "rerank"}
+
+        # Discover importable providers from live inst_map
         imported = []
         if isinstance(inst_map, dict):
             for pid, prov in inst_map.items():
                 pid_str = str(pid).strip()
                 if not pid_str or pid_str in excluded_ids or pid_str in existing_pids:
                     continue
-                # Only import chat_completion type providers
-                ptype = str(getattr(prov, "provider_config", {}).get("type") or "")
-                if ptype and ptype != "openai_chat_completion":
+                ptype = str(getattr(prov, "provider_config", {}).get("type") or "").lower()
+                if any(bad in ptype for bad in ignored_types):
                     continue
                 model = str(getattr(prov, "get_model", lambda: "")() or "")
                 group_name = model or pid_str
@@ -442,6 +488,34 @@ class LLMPoolPlugin(star.Star):
                     "enabled": True,
                 })
                 existing_pids.add(pid_str)
+
+        # Also discover from AstrBot default_conf
+        try:
+            acm = getattr(self.context, "astrbot_config_mgr", None)
+            default_conf = getattr(acm, "default_conf", None)
+            if default_conf is not None:
+                for k in ("provider", "providers"):
+                    p_list = default_conf.get(k, []) if hasattr(default_conf, "get") else []
+                    if isinstance(p_list, list):
+                        for item in p_list:
+                            if isinstance(item, dict):
+                                pid_str = str(item.get("id") or item.get("provider") or "").strip()
+                                if not pid_str or pid_str in excluded_ids or pid_str in existing_pids:
+                                    continue
+                                ptype = str(item.get("type") or "").lower()
+                                if any(bad in ptype for bad in ignored_types):
+                                    continue
+                                model = str(item.get("model") or "")
+                                group_name = model or pid_str
+                                imported.append({
+                                    "__template_key": "provider",
+                                    "provider_id": pid_str,
+                                    "group_name": group_name,
+                                    "enabled": True,
+                                })
+                                existing_pids.add(pid_str)
+        except Exception:
+            pass
 
         if not imported:
             return json_response({
@@ -496,6 +570,10 @@ class LLMPoolPlugin(star.Star):
         for m in self.config.get("members", []):
             if isinstance(m, dict) and not m.get("__template_key"):
                 m["__template_key"] = "provider"
+
+        for dp in self.config.get("dedicated_pools", []):
+            if isinstance(dp, dict) and not dp.get("__template_key"):
+                dp["__template_key"] = "pool"
 
         self._safe_save_plugin_config()
 
@@ -651,6 +729,10 @@ class LLMPoolPlugin(star.Star):
         for m in self.config.get("members", []):
             if isinstance(m, dict) and not m.get("__template_key"):
                 m["__template_key"] = "provider"
+
+        for dp in self.config.get("dedicated_pools", []):
+            if isinstance(dp, dict) and not dp.get("__template_key"):
+                dp["__template_key"] = "pool"
 
         self._safe_save_plugin_config()
 
@@ -815,6 +897,11 @@ class LLMPoolPlugin(star.Star):
         for al in self.config.get("model_group_alias", []):
             if isinstance(al, dict) and not al.get("__template_key"):
                 al["__template_key"] = "alias_rule"
+                config_modified = True
+
+        for dp in self.config.get("dedicated_pools", []):
+            if isinstance(dp, dict) and not dp.get("__template_key"):
+                dp["__template_key"] = "pool"
                 config_modified = True
 
         if config_modified:
