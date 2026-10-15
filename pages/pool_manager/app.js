@@ -2082,23 +2082,30 @@ function renderInspectorList() {
       const isSelected = r.id === inspectorSelectedId;
       const isSuccess = r.status === "SUCCESS";
       const statusClass = isSuccess ? "badge-success" : "badge-danger";
+      const statusBorderClass = isSuccess ? "status-success" : "status-failed";
       const statusText = isSuccess ? "SUCCESS" : "FAILED";
       const streamBadge = r.is_stream ? `<span class="badge badge-info" style="font-size:0.65rem;">流式</span>` : `<span class="badge badge-secondary" style="font-size:0.65rem;">非流式</span>`;
-      const promptSnippet = escapeHtml(r.prompt || (r.contexts && r.contexts.length > 0 ? "[多轮对话上下文]" : "[无提示词]"));
+      
+      let promptSnippet = r.prompt;
+      if (!promptSnippet && r.contexts && r.contexts.length > 0) {
+        const lastMsg = r.contexts[r.contexts.length - 1];
+        promptSnippet = typeof lastMsg.content === "string" ? lastMsg.content : "[多轮对话上下文]";
+      }
+      if (!promptSnippet) promptSnippet = "[无单轮 prompt]";
 
       return `
-        <div class="inspector-item-card ${isSelected ? "active" : ""}" data-id="${r.id}">
+        <div class="inspector-item-card ${statusBorderClass} ${isSelected ? "active" : ""}" data-id="${r.id}">
           <div class="inspector-item-header">
-            <span style="font-family:monospace;font-weight:600;">#${r.id} · ${escapeHtml(r.time_str.split(" ")[1] || r.time_str)}</span>
+            <span style="font-family:monospace;font-weight:700;">#${r.id} · ${escapeHtml(r.time_str.split(" ")[1] || r.time_str)}</span>
             <div class="inspector-item-meta">
               ${streamBadge}
               <span class="badge ${statusClass}" style="font-size:0.65rem;">${statusText}</span>
             </div>
           </div>
-          <div class="inspector-item-snippet" title="${promptSnippet}">${promptSnippet}</div>
+          <div class="inspector-item-snippet" title="${escapeHtml(promptSnippet)}">${escapeHtml(promptSnippet)}</div>
           <div class="inspector-item-node">
-            <span style="color:var(--text-muted);">${escapeHtml(r.model || "llm-pool")}</span>
-            <span style="font-family:monospace;font-weight:600;color:var(--primary);">${r.total_latency_ms} ms</span>
+            <span style="color:var(--text-muted);font-size:0.72rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.model || "llm-pool")}</span>
+            <span style="font-family:monospace;font-weight:700;color:var(--primary);">${r.total_latency_ms} ms</span>
           </div>
         </div>
       `;
@@ -2110,15 +2117,45 @@ function renderInspectorList() {
   container.querySelectorAll(".inspector-item-card").forEach((card) => {
     card.addEventListener("click", () => {
       const id = parseInt(card.dataset.id, 10);
-      inspectorSelectedId = id;
-      container.querySelectorAll(".inspector-item-card").forEach((c) => c.classList.remove("active"));
-      card.classList.add("active");
-      const record = inspectorRecords.find((r) => r.id === id);
-      if (record) {
-        renderInspectorDetail(record);
-      }
+      selectInspectorRecord(id);
     });
   });
+}
+
+function selectInspectorRecord(id) {
+  inspectorSelectedId = id;
+  const container = document.getElementById("inspector-records-list");
+  if (container) {
+    container.querySelectorAll(".inspector-item-card").forEach((c) => {
+      c.classList.toggle("active", parseInt(c.dataset.id, 10) === id);
+    });
+  }
+  const record = inspectorRecords.find((r) => r.id === id);
+  if (record) {
+    renderInspectorDetail(record);
+  }
+}
+
+function navigateInspectorRecord(delta) {
+  if (!inspectorRecords || inspectorRecords.length === 0) return;
+  const currIdx = inspectorRecords.findIndex((r) => r.id === inspectorSelectedId);
+  let nextIdx = 0;
+  if (currIdx === -1) {
+    nextIdx = delta > 0 ? 0 : inspectorRecords.length - 1;
+  } else {
+    nextIdx = currIdx + delta;
+    if (nextIdx < 0) nextIdx = 0;
+    if (nextIdx >= inspectorRecords.length) nextIdx = inspectorRecords.length - 1;
+  }
+  const nextRecord = inspectorRecords[nextIdx];
+  if (nextRecord) {
+    selectInspectorRecord(nextRecord.id);
+    // Scroll active item into view smoothly
+    const cardEl = document.querySelector(`.inspector-item-card[data-id="${nextRecord.id}"]`);
+    if (cardEl) {
+      cardEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
 }
 
 function renderInspectorDetail(record) {
@@ -2127,19 +2164,36 @@ function renderInspectorDetail(record) {
 
   const isSuccess = record.status === "SUCCESS";
   const statusBadge = isSuccess
-    ? `<span class="badge badge-success">调用成功 (SUCCESS)</span>`
-    : `<span class="badge badge-danger">调用失败 (FAILED)</span>`;
+    ? `<span class="badge badge-success" style="font-size:0.75rem;">调用成功 (SUCCESS)</span>`
+    : `<span class="badge badge-danger" style="font-size:0.75rem;">调用失败 (FAILED)</span>`;
 
-  // 1. Meta Grid
+  // Find index for prev/next
+  const currIdx = inspectorRecords.findIndex((r) => r.id === record.id);
+  const hasPrev = currIdx > 0;
+  const hasNext = currIdx < inspectorRecords.length - 1 && currIdx !== -1;
+
+  // 1. Sticky Header
+  const headerHtml = `
+    <div class="inspector-detail-sticky-header">
+      <div style="display:flex;align-items:center;gap:0.6rem;">
+        <h3 style="margin:0;font-size:1.05rem;font-weight:700;">抓包详情 #${record.id}</h3>
+        ${statusBadge}
+        <span style="font-size:0.75rem;color:var(--text-muted);font-family:monospace;">${escapeHtml(record.time_str)}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.4rem;">
+        <button class="btn btn-secondary btn-sm" onclick="navigateInspectorRecord(-1)" ${hasPrev ? "" : "disabled"} title="查看上一条记录 (较早)">◀ 上一条</button>
+        <button class="btn btn-secondary btn-sm" onclick="navigateInspectorRecord(1)" ${hasNext ? "" : "disabled"} title="查看下一条记录 (较新)">下一条 ▶</button>
+        <button class="btn btn-primary btn-sm" onclick="copyInspectorField(this, 'raw')" title="复制此条交互的完整 JSON 数据">📋 复制全部 JSON</button>
+      </div>
+    </div>
+  `;
+
+  // 2. Meta Grid
   const metaHtml = `
     <div class="inspector-meta-grid">
       <div class="inspector-meta-item">
-        <span class="inspector-meta-label">记录 ID / 时间</span>
-        <span class="inspector-meta-val">#${record.id} (${escapeHtml(record.time_str)})</span>
-      </div>
-      <div class="inspector-meta-item">
-        <span class="inspector-meta-label">请求模型 / 组</span>
-        <span class="inspector-meta-val">${escapeHtml(record.model)} (${escapeHtml(record.group_name)})</span>
+        <span class="inspector-meta-label">请求模型 / 分组</span>
+        <span class="inspector-meta-val">${escapeHtml(record.model)} <span style="color:var(--text-muted);font-weight:normal;">(${escapeHtml(record.group_name)})</span></span>
       </div>
       <div class="inspector-meta-item">
         <span class="inspector-meta-label">命中执行节点</span>
@@ -2147,22 +2201,22 @@ function renderInspectorDetail(record) {
       </div>
       <div class="inspector-meta-item">
         <span class="inspector-meta-label">传输模式</span>
-        <span class="inspector-meta-val">${record.is_stream ? "⚡ 流式传输 (Stream)" : "📦 常规阻塞 (Non-stream)"}</span>
+        <span class="inspector-meta-val">${record.is_stream ? "⚡ 流式分块 (Stream)" : "📦 阻塞等待 (Non-stream)"}</span>
       </div>
       <div class="inspector-meta-item">
         <span class="inspector-meta-label">总响应耗时</span>
-        <span class="inspector-meta-val" style="color:var(--accent);">${record.total_latency_ms} ms</span>
+        <span class="inspector-meta-val" style="color:var(--accent);font-family:monospace;">${record.total_latency_ms} ms</span>
       </div>
       ${record.ttft_ms !== null && record.ttft_ms !== undefined ? `
       <div class="inspector-meta-item">
         <span class="inspector-meta-label">首字延迟 (TTFT)</span>
-        <span class="inspector-meta-val" style="color:var(--success);">${record.ttft_ms} ms</span>
+        <span class="inspector-meta-val" style="color:var(--success);font-family:monospace;">${record.ttft_ms} ms</span>
       </div>
       ` : ""}
     </div>
   `;
 
-  // 2. System Prompt Box
+  // 3. System Prompt Box
   let systemPromptHtml = "";
   if (record.system_prompt) {
     systemPromptHtml = `
@@ -2176,7 +2230,7 @@ function renderInspectorDetail(record) {
     `;
   }
 
-  // 3. Multi-turn Contexts
+  // 4. Multi-turn Contexts
   let contextsHtml = "";
   if (record.contexts && record.contexts.length > 0) {
     const bubbles = record.contexts.map((msg) => {
@@ -2219,11 +2273,11 @@ function renderInspectorDetail(record) {
     `;
   }
 
-  // 4. Current Prompt & Multimodal Images
+  // 5. Current Prompt & Multimodal Images
   let imagesHtml = "";
   if (record.image_urls && record.image_urls.length > 0) {
     imagesHtml = `
-      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;">
+      <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-top:0.6rem;">
         ${record.image_urls.map((u) => `<img class="inspector-img-thumb" src="${escapeHtml(u)}" alt="image" />`).join("")}
       </div>
     `;
@@ -2236,29 +2290,29 @@ function renderInspectorDetail(record) {
         <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'prompt')">📋 复制</button>
       </div>
       <div class="inspector-box-body" id="insp-content-prompt" style="font-weight:500;">
-        ${escapeHtml(record.prompt || "[无单轮 prompt，通过 contexts 传输]")}
+        ${escapeHtml(record.prompt || "[无单轮独立 prompt，直接通过多轮上下文传输]")}
         ${imagesHtml}
       </div>
     </div>
   `;
 
-  // 5. Response or Error
+  // 6. Response or Error
   let respHtml = "";
   if (isSuccess) {
     respHtml = `
       <div class="inspector-box-card" style="border-color:rgba(16,185,129,0.35);">
         <div class="inspector-box-header" style="background:rgba(16,185,129,0.06);">
-          <span style="color:var(--success);">📤 LLM 返回的完整内容 (Completion Response)</span>
+          <span style="color:var(--success);font-weight:700;">📤 LLM 返回的完整内容 (Completion Response)</span>
           <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'resp')">📋 复制回复</button>
         </div>
-        <div class="inspector-box-body" id="insp-content-resp" style="background:rgba(16,185,129,0.02);">${escapeHtml(record.response_text || "[返回内容为空]")}</div>
+        <div class="inspector-box-body" id="insp-content-resp" style="background:rgba(16,185,129,0.015);">${escapeHtml(record.response_text || "[返回内容为空]")}</div>
       </div>
     `;
   } else {
     respHtml = `
       <div class="inspector-box-card" style="border-color:rgba(239,68,68,0.35);">
         <div class="inspector-box-header" style="background:rgba(239,68,68,0.06);">
-          <span style="color:var(--danger);">⚠️ 错误详情 (Error Details)</span>
+          <span style="color:var(--danger);font-weight:700;">⚠️ 错误详情与异常轨迹 (Error Details)</span>
           <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'err')">📋 复制错误</button>
         </div>
         <div class="inspector-box-body" id="insp-content-err" style="color:var(--danger);font-family:monospace;background:rgba(239,68,68,0.02);">${escapeHtml(record.error_msg || "未知错误")}</div>
@@ -2266,7 +2320,7 @@ function renderInspectorDetail(record) {
     `;
   }
 
-  // 6. Raw JSON Payload
+  // 7. Raw JSON Payload (Collapsible with smooth view)
   const rawJson = JSON.stringify(record, null, 2);
   const rawJsonHtml = `
     <details class="inspector-box-card" style="cursor:pointer;">
@@ -2274,24 +2328,22 @@ function renderInspectorDetail(record) {
         <span>📦 完整结构化数据快照 (Raw JSON)</span>
         <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();copyInspectorField(this, 'raw')">📋 复制全部 JSON</button>
       </summary>
-      <div class="inspector-box-body" id="insp-content-raw" style="font-family:monospace;font-size:0.75rem;background:rgba(0,0,0,0.02);">${escapeHtml(rawJson)}</div>
+      <div class="inspector-box-body" style="padding:0.75rem;">
+        <pre class="raw-json-pre">${escapeHtml(rawJson)}</pre>
+      </div>
     </details>
   `;
 
   panel.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:0.75rem;">
-      <h3 style="margin:0;font-size:1.05rem;">抓包详情 #${record.id}</h3>
-      <div style="display:flex;align-items:center;gap:0.5rem;">
-        ${statusBadge}
-        <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'raw')">📋 复制全部 JSON</button>
-      </div>
+    ${headerHtml}
+    <div class="inspector-detail-content">
+      ${metaHtml}
+      ${systemPromptHtml}
+      ${contextsHtml}
+      ${promptHtml}
+      ${respHtml}
+      ${rawJsonHtml}
     </div>
-    ${metaHtml}
-    ${systemPromptHtml}
-    ${contextsHtml}
-    ${promptHtml}
-    ${respHtml}
-    ${rawJsonHtml}
   `;
 }
 
@@ -2374,6 +2426,25 @@ document.getElementById("btn-inspector-refresh")?.addEventListener("click", asyn
 
 document.getElementById("inspector-filter-input")?.addEventListener("input", () => {
   renderInspectorList();
+});
+
+// Inspector Keyboard Navigation (Up/Down arrow keys)
+document.addEventListener("keydown", (e) => {
+  const activeTab = document.querySelector(".tab-btn.active")?.dataset.tab;
+  if (activeTab !== "tab-inspector") return;
+
+  const targetTag = (e.target?.tagName || "").toLowerCase();
+  if (targetTag === "input" || targetTag === "textarea" || targetTag === "select") {
+    return;
+  }
+
+  if (e.key === "ArrowUp" || e.key === "k") {
+    e.preventDefault();
+    navigateInspectorRecord(1); // newer
+  } else if (e.key === "ArrowDown" || e.key === "j") {
+    e.preventDefault();
+    navigateInspectorRecord(-1); // older
+  }
 });
 
 function escapeHtml(str) {
