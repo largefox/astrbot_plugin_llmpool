@@ -1308,6 +1308,222 @@ body {
   gap: 0.6rem;
 }
 
+/* Prompt Inspector Styles */
+.inspector-layout {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 1rem;
+  min-height: 560px;
+  max-height: 820px;
+}
+
+@media (max-width: 900px) {
+  .inspector-layout {
+    flex-direction: column;
+    max-height: none;
+  }
+}
+
+.inspector-sidebar {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.inspector-search-wrap {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.inspector-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem;
+  gap: 0.4rem;
+}
+
+.inspector-item-card {
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.inspector-item-card:hover {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.03);
+}
+
+.inspector-item-card.active {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.inspector-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.inspector-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.inspector-item-snippet {
+  font-size: 0.8rem;
+  color: var(--text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.inspector-item-node {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+}
+
+.inspector-detail-panel {
+  flex: 1;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.25rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.inspector-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.6rem;
+  background: rgba(0, 0, 0, 0.02);
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.inspector-meta-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.inspector-meta-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.inspector-meta-val {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-color);
+  word-break: break-all;
+}
+
+.inspector-box-card {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--card-bg);
+  overflow: hidden;
+}
+
+.inspector-box-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.025);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.inspector-box-body {
+  padding: 0.75rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.chat-bubble-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.chat-bubble {
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-width: 92%;
+  word-break: break-word;
+}
+
+.chat-bubble.role-user {
+  align-self: flex-end;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: var(--text-color);
+}
+
+.chat-bubble.role-assistant {
+  align-self: flex-start;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: var(--text-color);
+}
+
+.chat-bubble.role-system {
+  align-self: center;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.chat-bubble-role-badge {
+  font-weight: 700;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+  opacity: 0.75;
+}
+
+.inspector-img-thumb {
+  max-width: 140px;
+  max-height: 100px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  object-fit: cover;
+  margin-top: 4px;
+}
+
 .error-cat-item {
   display: flex;
   flex-direction: column;

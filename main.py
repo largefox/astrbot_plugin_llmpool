@@ -38,6 +38,11 @@ try:
 except ImportError:
     from api_server import APIServer
 
+try:
+    from .inspector import PromptInspector
+except ImportError:
+    from inspector import PromptInspector
+
 PLUGIN_NAME = "astrbot_plugin_llmpool"
 FALLBACK_PLUGIN_NAME = "astrbot_plugin_llm_pool"
 
@@ -127,6 +132,7 @@ class LLMPoolPlugin(star.Star):
         )
 
         self.key_manager = KeyManager(quarantine_duration=3600.0)
+        self.inspector = PromptInspector(max_records=100, lease_seconds=12.0)
 
         bind_runtime(
             context,
@@ -135,6 +141,7 @@ class LLMPoolPlugin(star.Star):
             circuit_breaker=self.circuit_breaker,
             router=self.router,
             key_manager=self.key_manager,
+            inspector=self.inspector,
         )
         self._register_web_apis()
 
@@ -204,6 +211,9 @@ class LLMPoolPlugin(star.Star):
             ("config/import_json", self.api_import_config, ["POST"], "Import plugin config from JSON payload"),
             ("config/clear_members", self.api_clear_members, ["POST"], "Clear all pool members"),
             ("config/reset_all", self.api_reset_all_config, ["POST"], "Reset all plugin config to schema defaults"),
+            ("inspector/heartbeat", self.api_inspector_heartbeat, ["POST"], "Keep prompt inspector lease active"),
+            ("inspector/records", self.api_inspector_records, ["GET"], "Get recent LLM prompt and response records"),
+            ("inspector/clear", self.api_inspector_clear, ["POST"], "Clear captured prompt inspection records"),
         ]
         # Register for both metadata name ("astrbot_plugin_llmpool") and directory name ("astrbot_plugin_llm_pool")
         names_to_register = {PLUGIN_NAME, FALLBACK_PLUGIN_NAME}
@@ -215,6 +225,39 @@ class LLMPoolPlugin(star.Star):
                     methods,
                     desc,
                 )
+
+    async def api_inspector_heartbeat(self) -> Any:
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            payload = {}
+        paused = payload.get("paused")
+        if self.inspector:
+            self.inspector.heartbeat(paused=paused)
+            status = self.inspector.get_status()
+        else:
+            status = {"active": False, "total_recorded": 0}
+        return json_response(status)
+
+    async def api_inspector_records(self) -> Any:
+        limit = request.query.get("limit", 50, type=int)
+        since_id = request.query.get("since_id", None, type=int)
+        if self.inspector:
+            # Polling also gently touches the lease
+            self.inspector.heartbeat()
+            records = self.inspector.get_records(limit=limit, since_id=since_id)
+            status = self.inspector.get_status()
+        else:
+            records = []
+            status = {"active": False, "total_recorded": 0}
+        return json_response({
+            "status": status,
+            "records": records,
+        })
+
+    async def api_inspector_clear(self) -> Any:
+        if self.inspector:
+            self.inspector.clear()
+        return json_response({"ok": True, "message": "已清空实时捕获记录"})
 
     async def api_get_routing_status(self) -> Any:
         members = normalize_members(self.config.get("members", []))

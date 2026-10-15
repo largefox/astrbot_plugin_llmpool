@@ -29,6 +29,7 @@
       <button class="tab-btn" data-tab="tab-cost">💰 成本与梯队下渗分析</button>
       <button class="tab-btn" data-tab="tab-nodes">🎛️ 模型池配置管理</button>
       <button class="tab-btn" data-tab="tab-logs">📜 实时调用流水</button>
+      <button class="tab-btn" data-tab="tab-inspector">🔍 实时内容捕获 (Inspector)</button>
       <button class="tab-btn" data-tab="tab-manage">⚙️ 插件管理</button>
     </div>
 
@@ -736,6 +737,51 @@
             <button id="btn-prev-page" class="btn btn-secondary btn-sm" disabled>◀ 上一页</button>
             <span id="pagination-current-page" style="font-size:0.85rem;font-weight:600;min-width:24px;text-align:center;">1</span>
             <button id="btn-next-page" class="btn btn-secondary btn-sm" disabled>下一页 ▶</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Tab 4: Prompt Inspector -->
+    <main id="tab-inspector" class="tab-content">
+      <section class="card section-card">
+        <div class="section-header" style="flex-wrap:wrap;gap:0.75rem;">
+          <div>
+            <h3>🔍 提交内容实时捕获 (Prompt & Payload Inspector)</h3>
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.35rem;">
+              <span id="inspector-status-badge" class="badge badge-success">🟢 抓包中 (页面在线)</span>
+              <span style="font-size:0.78rem;color:var(--text-muted);">
+                💡 仅在当前页面保持打开时向内存暂存最近 100 条（离开页面自动进入休眠，0 额外资源开销）
+              </span>
+            </div>
+          </div>
+          <div class="filter-bar" style="display:flex;flex-wrap:wrap;gap:0.5rem;align-items:center;">
+            <label style="font-size:0.8rem;display:flex;align-items:center;gap:0.35rem;cursor:pointer;">
+              <input type="checkbox" id="chk-inspector-autoscroll" checked />
+              <span>自动聚焦最新</span>
+            </label>
+            <button id="btn-inspector-pause" class="btn btn-secondary btn-sm">⏸️ 暂停抓包</button>
+            <button id="btn-inspector-clear" class="btn btn-secondary btn-sm">🗑️ 清空记录</button>
+            <button id="btn-inspector-refresh" class="btn btn-primary btn-sm">🔄 刷新</button>
+          </div>
+        </div>
+
+        <div class="inspector-layout">
+          <!-- Left Column: Request List -->
+          <div class="inspector-sidebar">
+            <div class="inspector-search-wrap">
+              <input type="text" id="inspector-filter-input" class="form-control form-control-sm" placeholder="🔍 检索关键词 / 模型 / 节点" />
+            </div>
+            <div class="inspector-list" id="inspector-records-list">
+              <div class="empty-placeholder">暂无抓包记录。保持此页面打开，向 Bot 发送消息即可实时捕获。</div>
+            </div>
+          </div>
+
+          <!-- Right Column: Detail View -->
+          <div class="inspector-detail-panel" id="inspector-detail-panel">
+            <div class="empty-placeholder" style="margin-top:4rem;">
+              👈 请从左侧列表中选择一条记录查看完整 Prompt、上下文与 LLM 回复
+            </div>
           </div>
         </div>
       </section>

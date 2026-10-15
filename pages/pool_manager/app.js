@@ -170,6 +170,11 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     if (target === "tab-nodes") loadConfig();
     if (target === "tab-overview") loadStats();
     if (target === "tab-cost") loadCostAnalysis();
+    if (target === "tab-inspector") {
+      startInspector();
+    } else {
+      stopInspector();
+    }
   });
 });
 
@@ -1957,6 +1962,408 @@ document.getElementById("btn-prev-page").addEventListener("click", () => {
 
 document.getElementById("btn-next-page").addEventListener("click", () => {
   loadLogs(currentLogPage + 1);
+});
+
+// ─── Prompt & Payload Inspector (Real-time On-demand Capture) ───
+
+let inspectorRecords = [];
+let inspectorSelectedId = null;
+let inspectorPaused = false;
+let inspectorTimer = null;
+
+function startInspector() {
+  stopInspector();
+  updateInspectorStatusBadge(true, inspectorPaused);
+  fetchInspectorData();
+  inspectorTimer = setInterval(fetchInspectorData, 4000);
+}
+
+function stopInspector() {
+  if (inspectorTimer) {
+    clearInterval(inspectorTimer);
+    inspectorTimer = null;
+  }
+  updateInspectorStatusBadge(false, inspectorPaused);
+}
+
+document.addEventListener("visibilitychange", () => {
+  const activeTab = document.querySelector(".tab-btn.active")?.dataset.tab;
+  if (activeTab === "tab-inspector") {
+    if (document.visibilityState === "visible") {
+      startInspector();
+    } else {
+      stopInspector();
+    }
+  }
+});
+
+function updateInspectorStatusBadge(isActive, isPaused) {
+  const badge = document.getElementById("inspector-status-badge");
+  if (!badge) return;
+  if (isPaused) {
+    badge.className = "badge badge-warning";
+    badge.textContent = "⏸️ 抓包已手动暂停";
+  } else if (isActive) {
+    badge.className = "badge badge-success";
+    badge.textContent = "🟢 实时抓包中 (页面在线 · 内存保留100条)";
+  } else {
+    badge.className = "badge badge-secondary";
+    badge.textContent = "⚪ 待机中 (页面切出自动休眠 · 0资源开销)";
+  }
+}
+
+async function fetchInspectorData() {
+  try {
+    const res = await apiGet("inspector/records?limit=100");
+    if (!res) return;
+    const records = res.records || [];
+    inspectorRecords = records;
+
+    const status = res.status || {};
+    updateInspectorStatusBadge(status.active && !status.paused, status.paused);
+
+    renderInspectorList();
+
+    // Auto-scroll / auto-select newest record if enabled or nothing is selected
+    const autoScroll = document.getElementById("chk-inspector-autoscroll")?.checked;
+    if (records.length > 0) {
+      if (autoScroll || inspectorSelectedId === null) {
+        const latest = records[records.length - 1];
+        if (inspectorSelectedId !== latest.id) {
+          inspectorSelectedId = latest.id;
+          renderInspectorDetail(latest);
+        }
+      } else {
+        const current = records.find((r) => r.id === inspectorSelectedId);
+        if (current) {
+          renderInspectorDetail(current);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("fetchInspectorData error:", err);
+  }
+}
+
+function renderInspectorList() {
+  const container = document.getElementById("inspector-records-list");
+  if (!container) return;
+
+  const keyword = (document.getElementById("inspector-filter-input")?.value || "").trim().toLowerCase();
+  const filtered = inspectorRecords.filter((r) => {
+    if (!keyword) return true;
+    const promptStr = String(r.prompt || "").toLowerCase();
+    const modelStr = String(r.model || "").toLowerCase();
+    const nodeStr = String(r.hit_node || "").toLowerCase();
+    const respStr = String(r.response_text || "").toLowerCase();
+    return promptStr.includes(keyword) || modelStr.includes(keyword) || nodeStr.includes(keyword) || respStr.includes(keyword);
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = `<div class="empty-placeholder">暂无符合条件的抓包记录。保持此页面打开并向 Bot 发送消息。</div>`;
+    return;
+  }
+
+  // Render in reverse chronological order (newest first)
+  const html = filtered
+    .slice()
+    .reverse()
+    .map((r) => {
+      const isSelected = r.id === inspectorSelectedId;
+      const isSuccess = r.status === "SUCCESS";
+      const statusClass = isSuccess ? "badge-success" : "badge-danger";
+      const statusText = isSuccess ? "SUCCESS" : "FAILED";
+      const streamBadge = r.is_stream ? `<span class="badge badge-info" style="font-size:0.65rem;">流式</span>` : `<span class="badge badge-secondary" style="font-size:0.65rem;">非流式</span>`;
+      const promptSnippet = escapeHtml(r.prompt || (r.contexts && r.contexts.length > 0 ? "[多轮对话上下文]" : "[无提示词]"));
+
+      return `
+        <div class="inspector-item-card ${isSelected ? "active" : ""}" data-id="${r.id}">
+          <div class="inspector-item-header">
+            <span style="font-family:monospace;font-weight:600;">#${r.id} · ${escapeHtml(r.time_str.split(" ")[1] || r.time_str)}</span>
+            <div class="inspector-item-meta">
+              ${streamBadge}
+              <span class="badge ${statusClass}" style="font-size:0.65rem;">${statusText}</span>
+            </div>
+          </div>
+          <div class="inspector-item-snippet" title="${promptSnippet}">${promptSnippet}</div>
+          <div class="inspector-item-node">
+            <span style="color:var(--text-muted);">${escapeHtml(r.model || "llm-pool")}</span>
+            <span style="font-family:monospace;font-weight:600;color:var(--primary);">${r.total_latency_ms} ms</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  container.innerHTML = html;
+
+  container.querySelectorAll(".inspector-item-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const id = parseInt(card.dataset.id, 10);
+      inspectorSelectedId = id;
+      container.querySelectorAll(".inspector-item-card").forEach((c) => c.classList.remove("active"));
+      card.classList.add("active");
+      const record = inspectorRecords.find((r) => r.id === id);
+      if (record) {
+        renderInspectorDetail(record);
+      }
+    });
+  });
+}
+
+function renderInspectorDetail(record) {
+  const panel = document.getElementById("inspector-detail-panel");
+  if (!panel || !record) return;
+
+  const isSuccess = record.status === "SUCCESS";
+  const statusBadge = isSuccess
+    ? `<span class="badge badge-success">调用成功 (SUCCESS)</span>`
+    : `<span class="badge badge-danger">调用失败 (FAILED)</span>`;
+
+  // 1. Meta Grid
+  const metaHtml = `
+    <div class="inspector-meta-grid">
+      <div class="inspector-meta-item">
+        <span class="inspector-meta-label">记录 ID / 时间</span>
+        <span class="inspector-meta-val">#${record.id} (${escapeHtml(record.time_str)})</span>
+      </div>
+      <div class="inspector-meta-item">
+        <span class="inspector-meta-label">请求模型 / 组</span>
+        <span class="inspector-meta-val">${escapeHtml(record.model)} (${escapeHtml(record.group_name)})</span>
+      </div>
+      <div class="inspector-meta-item">
+        <span class="inspector-meta-label">命中执行节点</span>
+        <span class="inspector-meta-val" style="color:var(--primary);">${escapeHtml(record.hit_node)}</span>
+      </div>
+      <div class="inspector-meta-item">
+        <span class="inspector-meta-label">传输模式</span>
+        <span class="inspector-meta-val">${record.is_stream ? "⚡ 流式传输 (Stream)" : "📦 常规阻塞 (Non-stream)"}</span>
+      </div>
+      <div class="inspector-meta-item">
+        <span class="inspector-meta-label">总响应耗时</span>
+        <span class="inspector-meta-val" style="color:var(--accent);">${record.total_latency_ms} ms</span>
+      </div>
+      ${record.ttft_ms !== null && record.ttft_ms !== undefined ? `
+      <div class="inspector-meta-item">
+        <span class="inspector-meta-label">首字延迟 (TTFT)</span>
+        <span class="inspector-meta-val" style="color:var(--success);">${record.ttft_ms} ms</span>
+      </div>
+      ` : ""}
+    </div>
+  `;
+
+  // 2. System Prompt Box
+  let systemPromptHtml = "";
+  if (record.system_prompt) {
+    systemPromptHtml = `
+      <div class="inspector-box-card">
+        <div class="inspector-box-header">
+          <span>⚙️ 系统人设 (System Prompt)</span>
+          <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'sys')">📋 复制</button>
+        </div>
+        <div class="inspector-box-body" id="insp-content-sys">${escapeHtml(record.system_prompt)}</div>
+      </div>
+    `;
+  }
+
+  // 3. Multi-turn Contexts
+  let contextsHtml = "";
+  if (record.contexts && record.contexts.length > 0) {
+    const bubbles = record.contexts.map((msg) => {
+      const role = String(msg.role || "user").toLowerCase();
+      let contentStr = "";
+      let images = [];
+      if (typeof msg.content === "string") {
+        contentStr = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        msg.content.forEach((part) => {
+          if (typeof part === "string") contentStr += part;
+          else if (part && part.text) contentStr += part.text;
+          else if (part && part.image_url) images.push(part.image_url);
+        });
+      } else {
+        contentStr = JSON.stringify(msg.content, null, 2);
+      }
+
+      const imgThumbs = images.map((u) => `<img class="inspector-img-thumb" src="${escapeHtml(u)}" alt="attachment" />`).join("");
+
+      return `
+        <div class="chat-bubble role-${escapeHtml(role)}">
+          <div class="chat-bubble-role-badge">${escapeHtml(role)}</div>
+          <div>${escapeHtml(contentStr)}</div>
+          ${imgThumbs}
+        </div>
+      `;
+    }).join("");
+
+    contextsHtml = `
+      <div class="inspector-box-card">
+        <div class="inspector-box-header">
+          <span>💬 对话历史上下文 (${record.contexts.length} 条消息)</span>
+          <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'ctx')">📋 复制上下文 JSON</button>
+        </div>
+        <div class="inspector-box-body chat-bubble-stream">
+          ${bubbles}
+        </div>
+      </div>
+    `;
+  }
+
+  // 4. Current Prompt & Multimodal Images
+  let imagesHtml = "";
+  if (record.image_urls && record.image_urls.length > 0) {
+    imagesHtml = `
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;">
+        ${record.image_urls.map((u) => `<img class="inspector-img-thumb" src="${escapeHtml(u)}" alt="image" />`).join("")}
+      </div>
+    `;
+  }
+
+  const promptHtml = `
+    <div class="inspector-box-card">
+      <div class="inspector-box-header">
+        <span>📥 提交给 LLM 的本轮提示词 (Prompt)</span>
+        <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'prompt')">📋 复制</button>
+      </div>
+      <div class="inspector-box-body" id="insp-content-prompt" style="font-weight:500;">
+        ${escapeHtml(record.prompt || "[无单轮 prompt，通过 contexts 传输]")}
+        ${imagesHtml}
+      </div>
+    </div>
+  `;
+
+  // 5. Response or Error
+  let respHtml = "";
+  if (isSuccess) {
+    respHtml = `
+      <div class="inspector-box-card" style="border-color:rgba(16,185,129,0.35);">
+        <div class="inspector-box-header" style="background:rgba(16,185,129,0.06);">
+          <span style="color:var(--success);">📤 LLM 返回的完整内容 (Completion Response)</span>
+          <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'resp')">📋 复制回复</button>
+        </div>
+        <div class="inspector-box-body" id="insp-content-resp" style="background:rgba(16,185,129,0.02);">${escapeHtml(record.response_text || "[返回内容为空]")}</div>
+      </div>
+    `;
+  } else {
+    respHtml = `
+      <div class="inspector-box-card" style="border-color:rgba(239,68,68,0.35);">
+        <div class="inspector-box-header" style="background:rgba(239,68,68,0.06);">
+          <span style="color:var(--danger);">⚠️ 错误详情 (Error Details)</span>
+          <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'err')">📋 复制错误</button>
+        </div>
+        <div class="inspector-box-body" id="insp-content-err" style="color:var(--danger);font-family:monospace;background:rgba(239,68,68,0.02);">${escapeHtml(record.error_msg || "未知错误")}</div>
+      </div>
+    `;
+  }
+
+  // 6. Raw JSON Payload
+  const rawJson = JSON.stringify(record, null, 2);
+  const rawJsonHtml = `
+    <details class="inspector-box-card" style="cursor:pointer;">
+      <summary class="inspector-box-header" style="user-select:none;">
+        <span>📦 完整结构化数据快照 (Raw JSON)</span>
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();copyInspectorField(this, 'raw')">📋 复制全部 JSON</button>
+      </summary>
+      <div class="inspector-box-body" id="insp-content-raw" style="font-family:monospace;font-size:0.75rem;background:rgba(0,0,0,0.02);">${escapeHtml(rawJson)}</div>
+    </details>
+  `;
+
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);padding-bottom:0.75rem;">
+      <h3 style="margin:0;font-size:1.05rem;">抓包详情 #${record.id}</h3>
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        ${statusBadge}
+        <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'raw')">📋 复制全部 JSON</button>
+      </div>
+    </div>
+    ${metaHtml}
+    ${systemPromptHtml}
+    ${contextsHtml}
+    ${promptHtml}
+    ${respHtml}
+    ${rawJsonHtml}
+  `;
+}
+
+// Inspector Copy Handler
+window.copyInspectorField = function(btn, field) {
+  const record = inspectorRecords.find((r) => r.id === inspectorSelectedId);
+  if (!record) return;
+
+  let textToCopy = "";
+  if (field === "sys") textToCopy = record.system_prompt || "";
+  else if (field === "ctx") textToCopy = JSON.stringify(record.contexts || [], null, 2);
+  else if (field === "prompt") textToCopy = record.prompt || "";
+  else if (field === "resp") textToCopy = record.response_text || "";
+  else if (field === "err") textToCopy = record.error_msg || "";
+  else if (field === "raw") textToCopy = JSON.stringify(record, null, 2);
+
+  if (!navigator.clipboard) {
+    showToast("当前浏览器环境不支持一键复制", "warning");
+    return;
+  }
+
+  navigator.clipboard.writeText(textToCopy).then(() => {
+    const orig = btn.innerHTML;
+    btn.innerHTML = "✅ 已复制";
+    setTimeout(() => {
+      btn.innerHTML = orig;
+    }, 1500);
+  }).catch(() => {
+    showToast("复制失败，请手动选择复制", "error");
+  });
+};
+
+// Inspector Event Listeners
+document.getElementById("btn-inspector-pause")?.addEventListener("click", async () => {
+  inspectorPaused = !inspectorPaused;
+  const btn = document.getElementById("btn-inspector-pause");
+  if (inspectorPaused) {
+    btn.innerHTML = "▶️ 继续抓包";
+    showToast("实时抓包已暂停", "info", 1500);
+  } else {
+    btn.innerHTML = "⏸️ 暂停抓包";
+    showToast("实时抓包已恢复", "success", 1500);
+  }
+  updateInspectorStatusBadge(!inspectorPaused, inspectorPaused);
+  try {
+    await apiPost("inspector/heartbeat", { paused: inspectorPaused });
+  } catch (err) {
+    console.error("Failed to sync pause state:", err);
+  }
+});
+
+document.getElementById("btn-inspector-clear")?.addEventListener("click", async () => {
+  const confirmed = await showConfirm({
+    title: "清空抓包记录",
+    message: "确认清空内存中捕获的所有 Prompt 与回复记录？此操作不会影响已持久化的请求统计。",
+    okText: "清空",
+    okClass: "btn-danger",
+  });
+  if (!confirmed) return;
+
+  try {
+    await apiPost("inspector/clear", {});
+    inspectorRecords = [];
+    inspectorSelectedId = null;
+    renderInspectorList();
+    const panel = document.getElementById("inspector-detail-panel");
+    if (panel) {
+      panel.innerHTML = `<div class="empty-placeholder" style="margin-top:4rem;">👈 请从左侧列表中选择一条记录查看完整 Prompt、上下文与 LLM 回复</div>`;
+    }
+    showToast("抓包记录已清空", "success", 1500);
+  } catch (err) {
+    showToast("清空失败: " + err.message, "error");
+  }
+});
+
+document.getElementById("btn-inspector-refresh")?.addEventListener("click", async () => {
+  await fetchInspectorData();
+  showToast("抓包列表已刷新", "info", 1200);
+});
+
+document.getElementById("inspector-filter-input")?.addEventListener("input", () => {
+  renderInspectorList();
 });
 
 function escapeHtml(str) {

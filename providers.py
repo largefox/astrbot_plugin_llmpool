@@ -32,7 +32,7 @@ try:
         POOL_PROVIDER_TYPE,
     )
     from .routing import PoolMember, normalize_members, rotate_members, weighted_random_order
-    from .runtime import get_components, get_runtime
+    from .runtime import get_components, get_inspector, get_runtime
     from .vision_utils import (
         is_context_format_error,
         is_vision_unsupported_error,
@@ -47,7 +47,7 @@ except ImportError:
         POOL_PROVIDER_TYPE,
     )
     from routing import PoolMember, normalize_members, rotate_members, weighted_random_order
-    from runtime import get_components, get_runtime
+    from runtime import get_components, get_inspector, get_runtime
     from vision_utils import (
         is_context_format_error,
         is_vision_unsupported_error,
@@ -700,6 +700,56 @@ class ProviderLLMPool(Provider):
         failures: list[tuple[str, str]] = []
         attempt_count = 0
 
+        def _record_inspector_success(hit_node_id: str, resp_obj: Any, grp: str | None = None) -> None:
+            insp = get_inspector()
+            if insp and insp.is_active():
+                try:
+                    resp_txt = (
+                        getattr(resp_obj, "completion_text", None)
+                        or getattr(resp_obj, "text", None)
+                        or (str(resp_obj) if resp_obj is not None else "")
+                    )
+                    lat_ms = (time.time() - overall_start_time) * 1000.0
+                    insp.record_interaction(
+                        model=model,
+                        group_name=grp or (current_group if "current_group" in locals() else None),
+                        hit_node=hit_node_id,
+                        is_stream=False,
+                        prompt=prompt,
+                        contexts=contexts,
+                        system_prompt=system_prompt,
+                        image_urls=image_urls,
+                        response_text=resp_txt,
+                        status="SUCCESS",
+                        total_latency_ms=lat_ms,
+                        attempts=[{"node_id": pid, "error": err} for pid, err in failures],
+                    )
+                except Exception:
+                    pass
+
+        def _record_inspector_failure(err_details: str) -> None:
+            insp = get_inspector()
+            if insp and insp.is_active():
+                try:
+                    lat_ms = (time.time() - overall_start_time) * 1000.0
+                    insp.record_interaction(
+                        model=model,
+                        group_name=None,
+                        hit_node="none",
+                        is_stream=False,
+                        prompt=prompt,
+                        contexts=contexts,
+                        system_prompt=system_prompt,
+                        image_urls=image_urls,
+                        response_text=None,
+                        status="FAILED",
+                        total_latency_ms=lat_ms,
+                        error_msg=err_details,
+                        attempts=[{"node_id": pid, "error": err} for pid, err in failures],
+                    )
+                except Exception:
+                    pass
+
         while remaining_candidates:
             elapsed_total = time.time() - overall_start_time
             remaining_budget = global_budget_seconds - elapsed_total
@@ -834,7 +884,9 @@ class ProviderLLMPool(Provider):
             if hedge_sibling is None:
                 # No same-group sibling for hedging, run primary directly
                 try:
-                    return await task_primary
+                    resp = await task_primary
+                    _record_inspector_success(member.provider_id, resp, current_group)
+                    return resp
                 except Exception as exc:
                     failures.append((member.provider_id, safe_error("", exc)))
                     continue
@@ -844,7 +896,9 @@ class ProviderLLMPool(Provider):
             done, pending = await asyncio.wait({task_primary}, timeout=effective_hedge_delay)
             if task_primary in done:
                 try:
-                    return task_primary.result()
+                    resp = task_primary.result()
+                    _record_inspector_success(member.provider_id, resp, current_group)
+                    return resp
                 except Exception as exc:
                     failures.append((member.provider_id, safe_error("", exc)))
                     # Primary failed fast (e.g. 429). Now run the sibling immediately!
@@ -852,7 +906,7 @@ class ProviderLLMPool(Provider):
                     attempt_count += 1
                     sibling_timeout = min(sibling_m.get_effective_timeout(timeout_seconds), max(3.0, remaining_budget))
                     try:
-                        return await self._invoke_single_candidate(
+                        resp = await self._invoke_single_candidate(
                             member=sibling_m,
                             provider=sibling_p,
                             prompt=prompt,
@@ -875,6 +929,8 @@ class ProviderLLMPool(Provider):
                             max_attempts=max_attempts,
                             verbose=verbose,
                         )
+                        _record_inspector_success(sibling_m.provider_id, resp, current_group)
+                        return resp
                     except Exception as sib_exc:
                         failures.append((sibling_m.provider_id, safe_error("", sib_exc)))
                         continue
@@ -962,6 +1018,7 @@ class ProviderLLMPool(Provider):
                             )
                         except Exception:
                             pass
+                    _record_inspector_success(winner_node_id, winner_response, current_group)
                     return winner_response
 
             # Both primary and hedge failed; loop continues to next group
@@ -978,6 +1035,8 @@ class ProviderLLMPool(Provider):
             attempt_count,
             details,
         )
+
+        _record_inspector_failure(details)
 
         suppress_error = bool(plugin_config.get("suppress_error_raise", True))
         if suppress_error:
@@ -1005,6 +1064,11 @@ class ProviderLLMPool(Provider):
         **kwargs: Any,
     ) -> AsyncGenerator[LLMResponse, None]:
         metrics_store, circuit_breaker, _, key_manager = get_components()
+        stream_overall_start = time.time()
+        insp = get_inspector()
+        capture_stream = bool(insp and insp.is_active())
+        captured_chunks: list[str] = [] if capture_stream else []
+
         has_images = request_contains_image(
             image_urls=image_urls,
             contexts=contexts,
@@ -1134,6 +1198,14 @@ class ProviderLLMPool(Provider):
                         ttft_ms = (first_token_time - start_time) * 1000.0
 
                         # First token arrived! Yield it and lock onto this provider.
+                        if capture_stream:
+                            c_txt = (
+                                getattr(first_chunk, "completion_text", None)
+                                or getattr(first_chunk, "text", None)
+                                or (str(first_chunk) if isinstance(first_chunk, str) else "")
+                            )
+                            if c_txt:
+                                captured_chunks.append(c_txt)
                         yield first_chunk
 
                         # Continue consuming remaining chunks with watchdog for mid-stream stalls
@@ -1143,6 +1215,14 @@ class ProviderLLMPool(Provider):
                                     gen.__anext__(),
                                     timeout=chunk_stall_timeout,
                                 )
+                                if capture_stream:
+                                    c_txt = (
+                                        getattr(next_chunk, "completion_text", None)
+                                        or getattr(next_chunk, "text", None)
+                                        or (str(next_chunk) if isinstance(next_chunk, str) else "")
+                                    )
+                                    if c_txt:
+                                        captured_chunks.append(c_txt)
                                 yield next_chunk
                             except StopAsyncIteration:
                                 break
@@ -1166,12 +1246,50 @@ class ProviderLLMPool(Provider):
                                 total_latency_ms=total_latency_ms,
                                 status="SUCCESS",
                             )
+                        if capture_stream and insp:
+                            try:
+                                insp.record_interaction(
+                                    model=model,
+                                    group_name=member.group_name or "default",
+                                    hit_node=provider_id,
+                                    is_stream=True,
+                                    prompt=prompt,
+                                    contexts=contexts,
+                                    system_prompt=system_prompt,
+                                    image_urls=image_urls,
+                                    response_text="".join(captured_chunks),
+                                    status="SUCCESS",
+                                    total_latency_ms=total_latency_ms,
+                                    ttft_ms=ttft_ms,
+                                    attempts=[{"node_id": pid, "error": err} for pid, err in failures],
+                                )
+                            except Exception:
+                                pass
                         member_succeeded = True
                         return
 
                     except StopAsyncIteration:
                         total_latency_ms = (time.time() - start_time) * 1000.0
                         if first_token_time is not None:
+                            if capture_stream and insp:
+                                try:
+                                    insp.record_interaction(
+                                        model=model,
+                                        group_name=member.group_name or "default",
+                                        hit_node=provider_id,
+                                        is_stream=True,
+                                        prompt=prompt,
+                                        contexts=contexts,
+                                        system_prompt=system_prompt,
+                                        image_urls=image_urls,
+                                        response_text="".join(captured_chunks),
+                                        status="SUCCESS",
+                                        total_latency_ms=total_latency_ms,
+                                        ttft_ms=ttft_ms,
+                                        attempts=[{"node_id": pid, "error": err} for pid, err in failures],
+                                    )
+                                except Exception:
+                                    pass
                             member_succeeded = True
                             return
                         error_text = "Upstream stream ended with no content"
@@ -1274,6 +1392,26 @@ class ProviderLLMPool(Provider):
             max_attempts,
             details,
         )
+
+        if insp and insp.is_active():
+            try:
+                insp.record_interaction(
+                    model=model,
+                    group_name=None,
+                    hit_node="none",
+                    is_stream=True,
+                    prompt=prompt,
+                    contexts=contexts,
+                    system_prompt=system_prompt,
+                    image_urls=image_urls,
+                    response_text=None,
+                    status="FAILED",
+                    total_latency_ms=(time.time() - stream_overall_start) * 1000.0,
+                    error_msg=details,
+                    attempts=[{"node_id": pid, "error": err} for pid, err in failures],
+                )
+            except Exception:
+                pass
 
         suppress_error = bool(plugin_config.get("suppress_error_raise", True))
         if suppress_error:
