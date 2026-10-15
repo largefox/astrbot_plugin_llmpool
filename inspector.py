@@ -11,15 +11,18 @@ Zero overhead when no active inspection session is open:
 from __future__ import annotations
 
 import collections
+import logging
 import time
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger("astrbot_plugin_llmpool.inspector")
 
 
 class PromptInspector:
     """Bounded in-memory store for complete LLM request and response records."""
 
-    def __init__(self, max_records: int = 100, lease_seconds: float = 12.0) -> None:
+    def __init__(self, max_records: int = 100, lease_seconds: float = 60.0) -> None:
         self.max_records = max_records
         self.lease_seconds = lease_seconds
         self._last_heartbeat: float = 0.0
@@ -29,9 +32,12 @@ class PromptInspector:
 
     def heartbeat(self, paused: bool | None = None) -> None:
         """Called by frontend polling to keep the recording lease active."""
+        prev_active = self.is_active()
         self._last_heartbeat = time.time()
         if paused is not None:
             self._paused = bool(paused)
+        if not prev_active and self.is_active():
+            logger.info("llm pool inspector lease activated (lease=%.1fs)", self.lease_seconds)
 
     def is_active(self) -> bool:
         """Return True if an inspector page is currently open and recording is not paused."""
@@ -130,6 +136,8 @@ class PromptInspector:
     ) -> None:
         """Record an end-to-end LLM submission and response."""
         if not self.is_active():
+            elapsed = round(time.time() - self._last_heartbeat, 1) if self._last_heartbeat > 0 else "never"
+            logger.debug("llm pool inspector: interaction skipped (inactive, last_hb=%s)", elapsed)
             return
 
         self._counter += 1
@@ -160,6 +168,14 @@ class PromptInspector:
         }
 
         self._records.append(entry)
+        logger.info(
+            "llm pool inspector: captured #%d model=%s hit=%s status=%s prompt_len=%d",
+            self._counter,
+            entry["model"],
+            entry["hit_node"],
+            status,
+            len(str(prompt or "")),
+        )
 
     def get_records(self, limit: int = 50, since_id: int | None = None) -> list[dict[str, Any]]:
         """Retrieve recent inspection records."""

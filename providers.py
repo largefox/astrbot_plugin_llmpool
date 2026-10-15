@@ -712,7 +712,7 @@ class ProviderLLMPool(Provider):
                     lat_ms = (time.time() - overall_start_time) * 1000.0
                     insp.record_interaction(
                         model=model,
-                        group_name=grp or (current_group if "current_group" in locals() else None),
+                        group_name=grp or "default",
                         hit_node=hit_node_id,
                         is_stream=False,
                         prompt=prompt,
@@ -724,8 +724,8 @@ class ProviderLLMPool(Provider):
                         total_latency_ms=lat_ms,
                         attempts=[{"node_id": pid, "error": err} for pid, err in failures],
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("llm pool inspector success record error: %s", exc)
 
         def _record_inspector_failure(err_details: str) -> None:
             insp = get_inspector()
@@ -747,8 +747,8 @@ class ProviderLLMPool(Provider):
                         error_msg=err_details,
                         attempts=[{"node_id": pid, "error": err} for pid, err in failures],
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("llm pool inspector failure record error: %s", exc)
 
         while remaining_candidates:
             elapsed_total = time.time() - overall_start_time

@@ -239,8 +239,18 @@ class LLMPoolPlugin(star.Star):
         return json_response(status)
 
     async def api_inspector_records(self) -> Any:
-        limit = request.query.get("limit", 50, type=int)
-        since_id = request.query.get("since_id", None, type=int)
+        try:
+            raw_limit = request.query.get("limit")
+            limit = int(raw_limit) if raw_limit is not None else 50
+        except (ValueError, TypeError):
+            limit = 50
+
+        try:
+            raw_since = request.query.get("since_id")
+            since_id = int(raw_since) if raw_since is not None else None
+        except (ValueError, TypeError):
+            since_id = None
+
         if self.inspector:
             # Polling also gently touches the lease
             self.inspector.heartbeat()

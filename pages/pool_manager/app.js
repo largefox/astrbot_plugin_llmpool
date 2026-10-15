@@ -171,9 +171,9 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
     if (target === "tab-overview") loadStats();
     if (target === "tab-cost") loadCostAnalysis();
     if (target === "tab-inspector") {
-      startInspector();
+      enterInspectorTab();
     } else {
-      stopInspector();
+      leaveInspectorTab();
     }
   });
 });
@@ -1969,33 +1969,43 @@ document.getElementById("btn-next-page").addEventListener("click", () => {
 let inspectorRecords = [];
 let inspectorSelectedId = null;
 let inspectorPaused = false;
-let inspectorTimer = null;
+let inspectorPollTimer = null;
+let inspectorGlobalHeartbeatTimer = null;
 
-function startInspector() {
-  stopInspector();
+// Global session heartbeat: keeps inspector active as long as ANY tab of the plugin manager is open
+function initGlobalSessionHeartbeat() {
+  if (inspectorGlobalHeartbeatTimer) clearInterval(inspectorGlobalHeartbeatTimer);
+  // Send initial ping
+  sendInspectorHeartbeat();
+  // Keep alive every 8 seconds
+  inspectorGlobalHeartbeatTimer = setInterval(sendInspectorHeartbeat, 8000);
+}
+
+async function sendInspectorHeartbeat() {
+  try {
+    const res = await apiPost("inspector/heartbeat", { paused: inspectorPaused });
+    if (res && res.active !== undefined) {
+      updateInspectorStatusBadge(res.active && !res.paused, res.paused);
+    }
+  } catch (err) {
+    console.debug("Inspector heartbeat ping skipped/failed:", err);
+  }
+}
+
+function enterInspectorTab() {
   updateInspectorStatusBadge(true, inspectorPaused);
   fetchInspectorData();
-  inspectorTimer = setInterval(fetchInspectorData, 4000);
+  if (inspectorPollTimer) clearInterval(inspectorPollTimer);
+  inspectorPollTimer = setInterval(fetchInspectorData, 2500);
 }
 
-function stopInspector() {
-  if (inspectorTimer) {
-    clearInterval(inspectorTimer);
-    inspectorTimer = null;
+function leaveInspectorTab() {
+  if (inspectorPollTimer) {
+    clearInterval(inspectorPollTimer);
+    inspectorPollTimer = null;
   }
-  updateInspectorStatusBadge(false, inspectorPaused);
+  // Global session heartbeat continues running in the background
 }
-
-document.addEventListener("visibilitychange", () => {
-  const activeTab = document.querySelector(".tab-btn.active")?.dataset.tab;
-  if (activeTab === "tab-inspector") {
-    if (document.visibilityState === "visible") {
-      startInspector();
-    } else {
-      stopInspector();
-    }
-  }
-});
 
 function updateInspectorStatusBadge(isActive, isPaused) {
   const badge = document.getElementById("inspector-status-badge");
@@ -2005,16 +2015,16 @@ function updateInspectorStatusBadge(isActive, isPaused) {
     badge.textContent = "⏸️ 抓包已手动暂停";
   } else if (isActive) {
     badge.className = "badge badge-success";
-    badge.textContent = "🟢 实时抓包中 (页面在线 · 内存保留100条)";
+    badge.textContent = "🟢 实时抓包中 (页面在线 · 租约健康)";
   } else {
     badge.className = "badge badge-secondary";
-    badge.textContent = "⚪ 待机中 (页面切出自动休眠 · 0资源开销)";
+    badge.textContent = "⚪ 待机中 (页面未打开 · 0资源开销)";
   }
 }
 
 async function fetchInspectorData() {
   try {
-    const res = await apiGet("inspector/records?limit=100");
+    const res = await apiGet("inspector/records", { limit: 100 });
     if (!res) return;
     const records = res.records || [];
     inspectorRecords = records;
@@ -2617,6 +2627,7 @@ async function init() {
       console.warn("Bridge ready fallback:", err);
     }
   }
+  initGlobalSessionHeartbeat();
   loadStats();
   maybeShowIntro();
 }
