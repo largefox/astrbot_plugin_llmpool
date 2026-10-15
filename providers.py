@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import time
 from collections.abc import AsyncGenerator
@@ -710,6 +711,25 @@ class ProviderLLMPool(Provider):
                         or (str(resp_obj) if resp_obj is not None else "")
                     )
                     lat_ms = (time.time() - overall_start_time) * 1000.0
+
+                    # Extract tool calls if present in LLMResponse
+                    tcs = []
+                    names = getattr(resp_obj, "tools_call_name", []) or []
+                    args_ls = getattr(resp_obj, "tools_call_args", []) or []
+                    ids = getattr(resp_obj, "tools_call_ids", []) or []
+                    if names:
+                        for i, name in enumerate(names):
+                            call_id = ids[i] if i < len(ids) and ids[i] else f"call_{i}"
+                            arg = args_ls[i] if i < len(args_ls) else {}
+                            tcs.append({
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": str(name),
+                                    "arguments": json.dumps(arg, ensure_ascii=False) if isinstance(arg, dict) else str(arg),
+                                },
+                            })
+
                     insp.record_interaction(
                         model=model,
                         group_name=grp or "default",
@@ -720,6 +740,7 @@ class ProviderLLMPool(Provider):
                         system_prompt=system_prompt,
                         image_urls=image_urls,
                         response_text=resp_txt,
+                        tool_calls=tcs or None,
                         status="SUCCESS",
                         total_latency_ms=lat_ms,
                         attempts=[{"node_id": pid, "error": err} for pid, err in failures],
@@ -1258,6 +1279,7 @@ class ProviderLLMPool(Provider):
                                     system_prompt=system_prompt,
                                     image_urls=image_urls,
                                     response_text="".join(captured_chunks),
+                                    tool_calls=None,
                                     status="SUCCESS",
                                     total_latency_ms=total_latency_ms,
                                     ttft_ms=ttft_ms,
@@ -1283,6 +1305,7 @@ class ProviderLLMPool(Provider):
                                         system_prompt=system_prompt,
                                         image_urls=image_urls,
                                         response_text="".join(captured_chunks),
+                                        tool_calls=None,
                                         status="SUCCESS",
                                         total_latency_ms=total_latency_ms,
                                         ttft_ms=ttft_ms,

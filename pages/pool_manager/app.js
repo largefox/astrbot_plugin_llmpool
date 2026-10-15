@@ -2302,7 +2302,46 @@ function renderInspectorDetail(record) {
     </div>
   `;
 
-  // 6. Response or Error
+  // 6. Tool Calls Box (if model invoked functions/tools)
+  let toolCallsHtml = "";
+  if (record.tool_calls && record.tool_calls.length > 0) {
+    const callsListHtml = record.tool_calls.map((tc, idx) => {
+      const fn = tc.function || {};
+      const fnName = fn.name || "unknown";
+      let fnArgs = fn.arguments || "{}";
+      try {
+        if (typeof fnArgs === "string") {
+          fnArgs = JSON.stringify(JSON.parse(fnArgs), null, 2);
+        } else if (typeof fnArgs === "object") {
+          fnArgs = JSON.stringify(fnArgs, null, 2);
+        }
+      } catch (_) {}
+
+      return `
+        <div style="background:rgba(168,85,247,0.06);border:1px solid rgba(168,85,247,0.25);border-radius:6px;padding:0.75rem;margin-bottom:0.5rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+            <span style="font-family:monospace;font-weight:700;color:#a855f7;">🛠️ #${idx + 1} ${escapeHtml(fnName)}</span>
+            <span style="font-size:0.72rem;color:var(--text-muted);font-family:monospace;">ID: ${escapeHtml(tc.id || "N/A")}</span>
+          </div>
+          <pre class="raw-json-pre" style="margin:0;background:rgba(0,0,0,0.04);">${escapeHtml(fnArgs)}</pre>
+        </div>
+      `;
+    }).join("");
+
+    toolCallsHtml = `
+      <div class="inspector-box-card" style="border-color:rgba(168,85,247,0.35);">
+        <div class="inspector-box-header" style="background:rgba(168,85,247,0.06);">
+          <span style="color:#a855f7;font-weight:700;">🛠️ 模型发起的工具调用 (Tool Calls - ${record.tool_calls.length} 个)</span>
+          <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'tools')">📋 复制工具调用 JSON</button>
+        </div>
+        <div class="inspector-box-body" style="padding:0.75rem;">
+          ${callsListHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  // 7. Response or Error
   let respHtml = "";
   if (isSuccess) {
     respHtml = `
@@ -2311,7 +2350,7 @@ function renderInspectorDetail(record) {
           <span style="color:var(--success);font-weight:700;">📤 LLM 返回的完整内容 (Completion Response)</span>
           <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'resp')">📋 复制回复</button>
         </div>
-        <div class="inspector-box-body" id="insp-content-resp" style="background:rgba(16,185,129,0.015);">${escapeHtml(record.response_text || "[返回内容为空]")}</div>
+        <div class="inspector-box-body" id="insp-content-resp" style="background:rgba(16,185,129,0.015);">${escapeHtml(record.response_text || (record.tool_calls && record.tool_calls.length > 0 ? "[触发工具调用，无直接文本输出]" : "[返回内容为空]"))}</div>
       </div>
     `;
   } else {
@@ -2326,7 +2365,7 @@ function renderInspectorDetail(record) {
     `;
   }
 
-  // 7. Raw JSON Payload (Collapsible with smooth view)
+  // 8. Raw JSON Payload (Collapsible with smooth view)
   const rawJson = JSON.stringify(record, null, 2);
   const rawJsonHtml = `
     <details class="inspector-box-card" style="cursor:pointer;">
@@ -2347,6 +2386,7 @@ function renderInspectorDetail(record) {
       ${systemPromptHtml}
       ${contextsHtml}
       ${promptHtml}
+      ${toolCallsHtml}
       ${respHtml}
       ${rawJsonHtml}
     </div>
@@ -2375,6 +2415,7 @@ window.copyInspectorField = function(btn, field) {
       })
       .join("\n\n");
   } else if (field === "prompt") textToCopy = record.prompt || "";
+  else if (field === "tools") textToCopy = JSON.stringify(record.tool_calls || [], null, 2);
   else if (field === "resp") textToCopy = record.response_text || "";
   else if (field === "err") textToCopy = record.error_msg || "";
   else if (field === "raw") textToCopy = JSON.stringify(record, null, 2);

@@ -41,8 +41,40 @@ def _add_cors_headers(response: web.StreamResponse) -> None:
             response.headers[k] = v
 
 
+class OpenAIToolSetAdapter:
+    """Adapts OpenAI API tools/functions into AstrBot's ToolSet interface.
+
+    Allows upstream providers (e.g. AstrBot's ProviderOpenAIOfficial) to recognize
+    tools, attach them to the LLM payload, and parse returned tool_calls without error.
+    """
+
+    def __init__(
+        self,
+        raw_tools: list[dict[str, Any]] | None = None,
+        raw_functions: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.tools: list[dict[str, Any]] = []
+        if raw_tools and isinstance(raw_tools, list):
+            for t in raw_tools:
+                if isinstance(t, dict):
+                    self.tools.append(t)
+        elif raw_functions and isinstance(raw_functions, list):
+            # Legacy OpenAI function_calling format
+            for f in raw_functions:
+                if isinstance(f, dict):
+                    self.tools.append({"type": "function", "function": f})
+
+    def get_func_desc_openai_style(
+        self, omit_empty_parameter_field: bool = False
+    ) -> list[dict[str, Any]]:
+        return self.tools
+
+
 def _parse_openai_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str | None, list[str]]:
-    """Parse OpenAI format messages into prompt, history contexts, system prompt, and image urls."""
+    """Parse OpenAI format messages into prompt, history contexts, system prompt, and image urls.
+
+    Carefully preserves tool_calls, tool_call_id, and multi-turn tool message chains.
+    """
     system_parts: list[str] = []
     contexts: list[dict[str, Any]] = []
     image_urls: list[str] = []
@@ -50,10 +82,13 @@ def _parse_openai_messages(messages: list[dict[str, Any]]) -> tuple[str, list[di
     for msg in messages:
         if not isinstance(msg, dict):
             continue
-        role = str(msg.get("role") or "user")
-        raw_content = msg.get("content", "")
-        text_content = ""
+        role = str(msg.get("role") or "user").strip()
+        raw_content = msg.get("content")
+        tool_calls = msg.get("tool_calls")
+        tool_call_id = msg.get("tool_call_id")
+        name = msg.get("name")
 
+        text_content = ""
         if isinstance(raw_content, str):
             text_content = raw_content
         elif isinstance(raw_content, list):
@@ -72,31 +107,102 @@ def _parse_openai_messages(messages: list[dict[str, Any]]) -> tuple[str, list[di
         if role == "system":
             if text_content:
                 system_parts.append(text_content)
+            continue
+
+        # Construct full normalized message dict
+        normalized_msg: dict[str, Any] = {"role": role}
+        if raw_content is not None or not tool_calls:
+            normalized_msg["content"] = text_content if text_content else (raw_content or "")
         else:
-            contexts.append({"role": role, "content": text_content})
+            normalized_msg["content"] = None
+
+        if tool_calls and isinstance(tool_calls, list):
+            normalized_msg["tool_calls"] = tool_calls
+        if tool_call_id:
+            normalized_msg["tool_call_id"] = str(tool_call_id)
+        if name:
+            normalized_msg["name"] = str(name)
+
+        contexts.append(normalized_msg)
 
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
-    # Separate last user message as prompt, and preceding ones as context history
+    # Separate last user message as prompt if it is a pure user text message
     last_user_prompt = ""
     history_contexts: list[dict[str, Any]] = []
-    if contexts and contexts[-1].get("role") == "user":
-        last_user_prompt = contexts[-1].get("content") or ""
+    if contexts and contexts[-1].get("role") == "user" and not contexts[-1].get("tool_calls"):
+        user_c = contexts[-1].get("content")
+        last_user_prompt = user_c if isinstance(user_c, str) else ""
         history_contexts = contexts[:-1]
     else:
+        # Last message is tool response or assistant message
         history_contexts = contexts
 
     return last_user_prompt, history_contexts, system_prompt, image_urls
 
 
+def _extract_tool_calls_from_response(response: Any) -> list[dict[str, Any]] | None:
+    """Extract tool calls from AstrBot LLMResponse object or raw_completion."""
+    # 1. Try extracting from raw_completion (OpenAI ChatCompletion structure)
+    raw_comp = getattr(response, "raw_completion", None)
+    if raw_comp and hasattr(raw_comp, "choices") and raw_comp.choices:
+        msg = getattr(raw_comp.choices[0], "message", None)
+        if msg and getattr(msg, "tool_calls", None):
+            res_tcs = []
+            for tc in msg.tool_calls:
+                tc_dict = {
+                    "id": getattr(tc, "id", None) or f"call_{uuid.uuid4().hex[:8]}",
+                    "type": getattr(tc, "type", "function"),
+                    "function": {
+                        "name": getattr(getattr(tc, "function", None), "name", ""),
+                        "arguments": getattr(getattr(tc, "function", None), "arguments", "{}"),
+                    },
+                }
+                res_tcs.append(tc_dict)
+            if res_tcs:
+                return res_tcs
+
+    # 2. Extract from AstrBot LLMResponse fields (tools_call_name, tools_call_args, tools_call_ids)
+    names = getattr(response, "tools_call_name", []) or []
+    args_ls = getattr(response, "tools_call_args", []) or []
+    ids = getattr(response, "tools_call_ids", []) or []
+
+    if names:
+        res_tcs = []
+        for i, name in enumerate(names):
+            call_id = ids[i] if i < len(ids) and ids[i] else f"call_{uuid.uuid4().hex[:8]}"
+            arg = args_ls[i] if i < len(args_ls) else {}
+            arg_str = json.dumps(arg, ensure_ascii=False) if isinstance(arg, dict) else str(arg or "{}")
+            res_tcs.append({
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": str(name),
+                    "arguments": arg_str,
+                },
+            })
+        return res_tcs
+
+    return None
+
+
 def _make_chat_completion(
     request_id: str,
     model: str,
-    text: str,
+    text: str | None,
     created_time: int,
     prompt_len: int = 0,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    comp_len = len(text)
+    comp_len = len(text or "")
+    message_obj: dict[str, Any] = {
+        "role": "assistant",
+        "content": text if text is not None else (None if tool_calls else ""),
+    }
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    if tool_calls:
+        message_obj["tool_calls"] = tool_calls
+
     return {
         "id": f"chatcmpl-{request_id}",
         "object": "chat.completion",
@@ -105,11 +211,8 @@ def _make_chat_completion(
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": text,
-                },
-                "finish_reason": "stop",
+                "message": message_obj,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
@@ -126,9 +229,12 @@ def _make_chat_chunk(
     delta_text: str | None,
     created_time: int,
     finish_reason: str | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     delta: dict[str, Any] = {}
-    if delta_text:
+    if tool_calls:
+        delta["tool_calls"] = tool_calls
+    elif delta_text:
         delta["content"] = delta_text
     elif finish_reason is None:
         delta["role"] = "assistant"
@@ -333,6 +439,16 @@ class APIServer:
         req_id = uuid.uuid4().hex[:12]
         created_time = int(time.time())
 
+        # Extract tools & tool_choice
+        tools_payload = body.get("tools")
+        functions_payload = body.get("functions")
+        tool_choice = body.get("tool_choice", "auto")
+        func_tool = (
+            OpenAIToolSetAdapter(raw_tools=tools_payload, raw_functions=functions_payload)
+            if (tools_payload or functions_payload)
+            else None
+        )
+
         prompt, history_contexts, system_prompt, image_urls = _parse_openai_messages(messages)
         provider = self._get_provider_instance(requested_model)
 
@@ -345,12 +461,16 @@ class APIServer:
                     system_prompt=system_prompt,
                     image_urls=image_urls or None,
                     model=requested_model,
+                    func_tool=func_tool,
+                    tool_choice=tool_choice,
                 )
-                comp_text = (
-                    getattr(response, "completion_text", None)
-                    or getattr(response, "text", None)
-                    or (str(response) if response is not None else "")
-                )
+                comp_text = None
+                for attr in ("completion_text", "text"):
+                    val = getattr(response, attr, None)
+                    if isinstance(val, str) and val:
+                        comp_text = val
+                        break
+                tool_calls = _extract_tool_calls_from_response(response)
             except Exception as exc:
                 logger.error("text_chat failed: %s", exc)
                 return web.json_response(
@@ -368,9 +488,10 @@ class APIServer:
             data = _make_chat_completion(
                 request_id=req_id,
                 model=requested_model,
-                text=comp_text,
+                text=comp_text if comp_text or not tool_calls else None,
                 created_time=created_time,
                 prompt_len=len(prompt),
+                tool_calls=tool_calls,
             )
             return web.json_response(data)
 
@@ -391,6 +512,7 @@ class APIServer:
         init_chunk = _make_chat_chunk(req_id, requested_model, None, created_time)
         await sse_resp.write(f"data: {json.dumps(init_chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
 
+        stream_tool_calls = None
         try:
             gen = provider.text_chat_stream(
                 prompt=prompt,
@@ -398,19 +520,39 @@ class APIServer:
                 system_prompt=system_prompt,
                 image_urls=image_urls or None,
                 model=requested_model,
+                func_tool=func_tool,
+                tool_choice=tool_choice,
             )
             async for chunk in gen:
-                chunk_text = (
-                    getattr(chunk, "completion_text", None)
-                    or getattr(chunk, "text", None)
-                    or (str(chunk) if isinstance(chunk, str) else "")
-                )
+                # Check for tool_calls in stream chunks
+                chunk_tool_calls = _extract_tool_calls_from_response(chunk)
+                if chunk_tool_calls:
+                    stream_tool_calls = chunk_tool_calls
+                    c_data = _make_chat_chunk(
+                        req_id,
+                        requested_model,
+                        None,
+                        created_time,
+                        tool_calls=chunk_tool_calls,
+                    )
+                    await sse_resp.write(f"data: {json.dumps(c_data, ensure_ascii=False)}\n\n".encode("utf-8"))
+
+                chunk_text = None
+                for attr in ("completion_text", "text"):
+                    val = getattr(chunk, attr, None)
+                    if isinstance(val, str) and val:
+                        chunk_text = val
+                        break
+                if chunk_text is None and isinstance(chunk, str) and chunk:
+                    chunk_text = chunk
+
                 if chunk_text:
                     c_data = _make_chat_chunk(req_id, requested_model, chunk_text, created_time)
                     await sse_resp.write(f"data: {json.dumps(c_data, ensure_ascii=False)}\n\n".encode("utf-8"))
 
             # Send terminal chunk
-            stop_chunk = _make_chat_chunk(req_id, requested_model, None, created_time, finish_reason="stop")
+            finish_reason = "tool_calls" if stream_tool_calls else "stop"
+            stop_chunk = _make_chat_chunk(req_id, requested_model, None, created_time, finish_reason=finish_reason)
             await sse_resp.write(f"data: {json.dumps(stop_chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
             await sse_resp.write(b"data: [DONE]\n\n")
         except Exception as exc:
