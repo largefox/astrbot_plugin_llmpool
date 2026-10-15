@@ -2250,11 +2250,14 @@ function renderInspectorDetail(record) {
       }
 
       const imgThumbs = images.map((u) => `<img class="inspector-img-thumb" src="${escapeHtml(u)}" alt="attachment" />`).join("");
+      const roleTagClass = `context-role-${escapeHtml(role)}`;
 
       return `
-        <div class="chat-bubble role-${escapeHtml(role)}">
-          <div class="chat-bubble-role-badge">${escapeHtml(role)}</div>
-          <div>${escapeHtml(contentStr)}</div>
+        <div class="context-message-item">
+          <div class="context-message-header">
+            <span class="context-role-tag ${roleTagClass}">[${escapeHtml(role)}]</span>
+          </div>
+          <div class="context-message-body">${escapeHtml(contentStr)}</div>
           ${imgThumbs}
         </div>
       `;
@@ -2264,9 +2267,12 @@ function renderInspectorDetail(record) {
       <div class="inspector-box-card">
         <div class="inspector-box-header">
           <span>💬 对话历史上下文 (${record.contexts.length} 条消息)</span>
-          <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'ctx')">📋 复制上下文 JSON</button>
+          <div style="display:flex;gap:0.4rem;">
+            <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'ctx-text')">📋 复制纯文本</button>
+            <button class="btn btn-secondary btn-sm" onclick="copyInspectorField(this, 'ctx')">📋 复制 JSON</button>
+          </div>
         </div>
-        <div class="inspector-box-body chat-bubble-stream">
+        <div class="context-message-list">
           ${bubbles}
         </div>
       </div>
@@ -2355,7 +2361,20 @@ window.copyInspectorField = function(btn, field) {
   let textToCopy = "";
   if (field === "sys") textToCopy = record.system_prompt || "";
   else if (field === "ctx") textToCopy = JSON.stringify(record.contexts || [], null, 2);
-  else if (field === "prompt") textToCopy = record.prompt || "";
+  else if (field === "ctx-text") {
+    textToCopy = (record.contexts || [])
+      .map((m) => {
+        let contentStr = "";
+        if (typeof m.content === "string") contentStr = m.content;
+        else if (Array.isArray(m.content)) {
+          contentStr = m.content.map((p) => (typeof p === "string" ? p : p?.text || "")).join("");
+        } else {
+          contentStr = JSON.stringify(m.content, null, 2);
+        }
+        return `[${m.role || "user"}]\n${contentStr}`;
+      })
+      .join("\n\n");
+  } else if (field === "prompt") textToCopy = record.prompt || "";
   else if (field === "resp") textToCopy = record.response_text || "";
   else if (field === "err") textToCopy = record.error_msg || "";
   else if (field === "raw") textToCopy = JSON.stringify(record, null, 2);
